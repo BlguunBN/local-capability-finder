@@ -353,7 +353,7 @@ class CapabilityFinderTests(unittest.TestCase):
                 "params": {"protocolVersion": "unsupported-version"},
             }
         )
-        self.assertEqual("2025-03-26", initialized["result"]["protocolVersion"])
+        self.assertEqual("2025-11-25", initialized["result"]["protocolVersion"])
         response = capability_mcp._dispatch(
             {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
         )
