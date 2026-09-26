@@ -12,14 +12,21 @@ Install `PyYAML` to exercise YAML MCP configuration support:
 ```sh
 python -m pip install PyYAML
 python -m unittest discover -s tests -v
+python tests/benchmark_queries.py
+python tests/smoke_package.py
 node --check bin/capfind.js
 node bin/capfind.js --help
 npm pack --dry-run
 ```
 
-The unit tests use temporary directories. `tests/benchmark_queries.py` checks
-search quality against a particular local skill catalog and requires
-`tiktoken`; it is optional for contributors with a different catalog.
+The unit tests and benchmark use temporary directories. The benchmark checks
+representative skill, MCP server, and plugin queries against a synthetic
+catalog, including an absent query and a compact JSON output ceiling. The
+package smoke check packs and installs the npm artifact in a temporary
+directory, then exercises its CLI and both legacy and current MCP stdio
+discovery and search flows. Node.js and npm are required for the smoke check.
+After a version is published, run `python tests/smoke_package.py --published`
+from its release checkout to verify the registry artifact.
 
 ## Pull requests
 

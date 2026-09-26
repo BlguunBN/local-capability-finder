@@ -7,7 +7,10 @@ import sys
 from typing import Any
 
 _PROTOCOL_VERSION = "2025-11-25"
+_MODERN_PROTOCOL_VERSION = "2026-07-28"
 _SUPPORTED_HANDSHAKE_VERSIONS = {"2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"}
+_SERVER_INFO = {"name": "local-capability-finder", "version": "0.1.2"}
+_META_PREFIX = "io.modelcontextprotocol/"
 
 
 def _tool_definitions() -> list[dict[str, Any]]:
@@ -116,6 +119,37 @@ def _encode(response: dict[str, Any]) -> str:
         )
 
 
+def _modern_result(result: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "resultType": "complete",
+        **result,
+        "_meta": {_META_PREFIX + "serverInfo": _SERVER_INFO},
+    }
+
+
+def _request_era(params: dict[str, Any], method: str) -> tuple[bool, dict[str, Any] | None]:
+    """Validate per-request metadata when a client uses the stateless protocol."""
+    meta = params.get("_meta")
+    modern = method == "server/discover" or isinstance(meta, dict) and any(
+        isinstance(key, str) and key.startswith(_META_PREFIX) for key in meta
+    )
+    if not modern:
+        return False, None
+    if not isinstance(meta, dict):
+        return True, {"code": -32602, "message": "Request _meta must be an object"}
+    version = meta.get(_META_PREFIX + "protocolVersion")
+    capabilities = meta.get(_META_PREFIX + "clientCapabilities")
+    if not isinstance(version, str) or not isinstance(capabilities, dict):
+        return True, {"code": -32602, "message": "Request _meta requires protocolVersion and clientCapabilities"}
+    if version != _MODERN_PROTOCOL_VERSION:
+        return True, {
+            "code": -32022,
+            "message": "Unsupported protocol version",
+            "data": {"supported": [_MODERN_PROTOCOL_VERSION], "requested": version},
+        }
+    return True, None
+
+
 def _dispatch(message: Any) -> dict[str, Any] | None:
     if not isinstance(message, dict) or message.get("jsonrpc") != "2.0":
         return _response(None, error={"code": -32600, "message": "Invalid Request"})
@@ -130,7 +164,23 @@ def _dispatch(message: Any) -> dict[str, Any] | None:
     if not isinstance(method, str) or not isinstance(params, dict):
         return _response(request_id, error={"code": -32600, "message": "Invalid Request"})
 
+    modern, error = _request_era(params, method)
+    if error is not None:
+        return _response(request_id, error=error)
+
+    if method == "server/discover":
+        return _response(
+            request_id,
+            _modern_result({
+                "supportedVersions": [_MODERN_PROTOCOL_VERSION],
+                "capabilities": {"tools": {}},
+                "ttlMs": 3600000,
+                "cacheScope": "public",
+            }),
+        )
     if method == "initialize":
+        if modern:
+            return _response(request_id, error={"code": -32601, "message": "Method not found: initialize"})
         requested = params.get("protocolVersion")
         negotiated = requested if isinstance(requested, str) and requested in _SUPPORTED_HANDSHAKE_VERSIONS else _PROTOCOL_VERSION
         return _response(
@@ -138,32 +188,33 @@ def _dispatch(message: Any) -> dict[str, Any] | None:
             {
                 "protocolVersion": negotiated,
                 "capabilities": {"tools": {"listChanged": False}},
-                "serverInfo": {"name": "local-capability-finder", "version": "0.1.1"},
+                "serverInfo": _SERVER_INFO,
             },
         )
     if method == "ping":
+        if modern:
+            return _response(request_id, error={"code": -32601, "message": "Method not found: ping"})
         return _response(request_id, {})
     if method == "tools/list":
-        return _response(request_id, {"tools": _tool_definitions()})
+        result = {"tools": _tool_definitions()}
+        if modern:
+            result.update({"ttlMs": 3600000, "cacheScope": "public"})
+        return _response(request_id, _modern_result(result) if modern else result)
     if method == "tools/call":
         name = params.get("name")
         if not isinstance(name, str):
             return _response(request_id, error={"code": -32602, "message": "Tool name is required"})
         try:
             result = _call_tool(name, params.get("arguments", {}))
-            return _response(
-                request_id,
-                {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}]},
-            )
+            content = {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}]}
+            return _response(request_id, _modern_result(content) if modern else content)
         except LookupError as exc:
             return _response(request_id, error={"code": -32602, "message": str(exc)})
         except ValueError as exc:
             return _response(request_id, error={"code": -32602, "message": str(exc)})
         except Exception as exc:  # surface backend failures as tool errors, not transport crashes
-            return _response(
-                request_id,
-                {"content": [{"type": "text", "text": str(exc)}], "isError": True},
-            )
+            content = {"content": [{"type": "text", "text": str(exc)}], "isError": True}
+            return _response(request_id, _modern_result(content) if modern else content)
     return _response(request_id, error={"code": -32601, "message": f"Method not found: {method}"})
 
 

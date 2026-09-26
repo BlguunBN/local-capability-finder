@@ -17,6 +17,7 @@
 !capability_finder.py
 !capability_mcp.py
 !skill_archive.py
+!startup_inventory.py
 !library_catalog.py
 !find_skills.py
 !find-skills.cmd

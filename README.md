@@ -43,9 +43,8 @@ Antigravity, OpenCode, and OMP JSON configurations are backed up before an entry
 an agent after installation so it discovers the three MCP tools.
 
 The tools are `search_capabilities`, `get_capability`, and `activate_skill`.
-The stdio server supports MCP's `initialize` handshake through protocol
-revision `2025-11-25`. Clients that probe the `2026-07-28` stateless revision
-need legacy fallback enabled.
+The stdio server supports the `2026-07-28` stateless `server/discover` flow and
+the legacy `initialize` handshake through `2025-11-25`.
 
 ### Interactive CLI
 
@@ -195,6 +194,20 @@ manifest by default; `--apply` moves only its listed skills, and
 Archive and restore refresh the indexes. Rebuild the optional categorized
 junction view afterward with `python organize_skills.py`.
 
+To compare active skill-list footprints before and after a batch, save two
+snapshots with `python startup_inventory.py --output before.json` and
+`python startup_inventory.py --output after.json`. Each snapshot records active
+skill counts and token counts for a normalized `name: description` list in
+every installed agent root. Token counts use `cl100k_base` when optional
+`tiktoken` is installed. They are a consistent proxy; actual startup prompt
+tokens depend on each agent and require that agent's own telemetry.
+
+In one local rollout, archiving 68 audited specialist skills removed 68
+top-level skill entries from each of 19 active roots. The normalized lists
+fell by 4,354 `cl100k_base` tokens per root (82,726 across those roots).
+Archived folders remained searchable and an exact-ID activation was checked.
+These figures measure skill-list text, not billed prompt tokens.
+
 ## Local files
 
 | Path | Purpose |
@@ -204,6 +217,7 @@ junction view afterward with `python organize_skills.py`.
 | `install_agents.py` | Idempotent MCP registration for installed clients |
 | `library_catalog.py` | Local skill catalog refresh |
 | `skill_archive.py` | Reversible on-demand archive |
+| `startup_inventory.py` | Active skill-list footprint snapshot by agent root |
 | `organize_skills.py` | Optional categorized junction view; uses Laya only for ambiguous categories |
 | `find_skills.py` | Legacy catalog search |
 | `tests/` | Finder unit tests and representative query benchmark |

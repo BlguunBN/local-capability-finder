@@ -27,11 +27,14 @@ STORE_ROOTS = {
     "codex": USER_ROOT / ".codex" / "skills",
     "claude": USER_ROOT / ".claude" / "skills",
     "gemini": USER_ROOT / ".gemini" / "skills",
+    "antigravity": USER_ROOT / ".gemini" / "config" / "skills",
     "openclaw": USER_ROOT / ".openclaw" / "skills",
+    "openclaw-autoclaw": USER_ROOT / ".openclaw-autoclaw" / "skills",
 }
 ALL_AGENT_ROOTS = {
     "agents": USER_ROOT / ".agents" / "skills",
     "gemini": USER_ROOT / ".gemini" / "skills",
+    "antigravity": USER_ROOT / ".gemini" / "config" / "skills",
     "claude": USER_ROOT / ".claude" / "skills",
     "codex": USER_ROOT / ".codex" / "skills",
     "commandcode": USER_ROOT / ".commandcode" / "skills",
@@ -44,6 +47,7 @@ ALL_AGENT_ROOTS = {
     "cline": USER_ROOT / ".cline" / "skills",
     "roo": USER_ROOT / ".roo" / "skills",
     "openclaw": USER_ROOT / ".openclaw" / "skills",
+    "openclaw-autoclaw": USER_ROOT / ".openclaw-autoclaw" / "skills",
     "hermes": USER_ROOT / ".hermes" / "skills",
     "kilocode": USER_ROOT / ".kilocode" / "skills",
     "trae": USER_ROOT / ".trae" / "skills",
@@ -137,7 +141,7 @@ def recreate_link(path: Path, raw_target: str, kind: str) -> None:
         )
         result = subprocess.run(
             ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
-            input=json.dumps({"path": str(path), "target": raw_target}),
+            input=json.dumps({"path": str(path), "target": normalized_path(Path(raw_target))}),
             capture_output=True, text=True, encoding="utf-8", check=False,
         )
         if result.returncode:

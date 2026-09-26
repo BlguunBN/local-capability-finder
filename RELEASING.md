@@ -12,6 +12,10 @@ to a release.
 4. Tag the reviewed commit and create a GitHub release.
 5. Publish to npm manually only when the owner approves the package contents
    and release version. Confirm the published package and README on npm.
+6. Run the `Published package smoke` workflow on the release tag, or run
+   `python tests/smoke_package.py --published` from that checkout. It installs
+   the exact version from the official npm registry and exercises the CLI and
+   both MCP wire flows.
 
 The package name is `local-capability-finder-cli`. Published name and version
 combinations cannot be reused.

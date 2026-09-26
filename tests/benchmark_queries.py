@@ -1,55 +1,82 @@
-"""Run after refresh to check representative local intent searches."""
+"""Portable search-quality benchmark using a synthetic local catalog."""
 
 import json
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from capability_finder import search
-import tiktoken
+from capability_finder import refresh_index, search
 
 
+SKILLS = {
+    "cad-viewer": "Inspect and review STEP CAD files and 3D models",
+    "cudaq-guide": "Develop CUDA quantum computing programs",
+    "cloudflare": "Deploy applications to Cloudflare Workers",
+    "pdf-editor": "Edit PDF documents and pages",
+    "dashboard-design": "Design analytics dashboards and charts",
+    "dicom-series-preflight": "Validate DICOM medical imaging series",
+}
 CASES = [
-    ("view CAD file", "skill", "cad-viewer"),
-    ("install cuopt", "skill", "cuopt-install"),
+    ("inspect a STEP CAD file", "skill", "cad-viewer"),
     ("CUDA quantum computing", "skill", "cudaq-guide"),
-    ("make a PowerPoint", None, "powerpoint"),
-    ("review code security", "skill", "review-security"),
-    ("deploy Cloudflare Workers", None, "cloudflare"),
-    ("browser automation", None, "browser"),
-    ("analyze spreadsheet", None, "spreadsheets"),
-    ("edit PDF", None, "pdf"),
-    ("LinkedIn marketing", "skill", "linkedin-marketing"),
-    ("Bambu Labs printer", "skill", "bambu-labs"),
-    ("debug broken UI", "skill", "debug-broken-ui"),
-    ("write PRD", "skill", "create-prd"),
-    ("Remotion video", "skill", "remotion-video-production"),
-    ("build MCP server", "skill", "build-mcp-server"),
-    ("knowledge graph", "skill", "graphify"),
-    ("design dashboard", "skill", "dashboard-design"),
-    ("fix DICOM series", "skill", "dicom-series-preflight"),
-    ("create Figma design", None, "figma-generate-design"),
-    ("playwright browser", "tool", "playwright"),
-    ("cloudflare", "plugin", "cloudflare"),
+    ("deploy Cloudflare Workers", "skill", "cloudflare"),
+    ("edit a PDF document", "skill", "pdf-editor"),
+    ("design analytics dashboard", "skill", "dashboard-design"),
+    ("check DICOM imaging series", "skill", "dicom-series-preflight"),
+    ("automate browser with Playwright", "tool", "playwright"),
+    ("manage Figma designs", "plugin", "figma"),
+    ("qzxqzxunmatched", None, None),
 ]
 
 
+def create_fixture(home: Path) -> Path:
+    """Create a small complete catalog, with all paths inside the caller's home."""
+    library = home / "ai-agent-library"
+    library.mkdir(parents=True)
+    rows = []
+    for name, description in SKILLS.items():
+        folder = home / ".agents" / "skills" / name
+        folder.mkdir(parents=True)
+        (folder / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: {description}\n---\n", encoding="utf-8"
+        )
+        rows.append({"name": name, "description": description, "path": str(folder),
+                     "skill_md": str(folder / "SKILL.md"), "source": "agents",
+                     "canonical": True, "roots": ["agents"]})
+    (library / "skills_index.json").write_text(json.dumps({"skills": rows}), encoding="utf-8")
+    (library / "mcp_servers.yaml").write_text(
+        "mcp_servers:\n  playwright:\n    description: Automate browser with Playwright\n    command: npx\n    args: ['@playwright/mcp']\n",
+        encoding="utf-8",
+    )
+    manifest = home / ".codex" / "plugins" / "cache" / "sample" / "figma" / "1.0" / ".codex-plugin"
+    manifest.mkdir(parents=True)
+    (manifest / "plugin.json").write_text(
+        json.dumps({"name": "figma", "version": "1.0", "description": "Manage Figma designs"}),
+        encoding="utf-8",
+    )
+    return library
+
+
 def main() -> int:
-    failures = []
+    misses = []
     max_bytes = 0
-    max_tokens = 0
-    encoder = tiktoken.get_encoding("cl100k_base")
-    for query, kind, expected in CASES:
-        results = search(query, kind=kind)
-        response = json.dumps(results, ensure_ascii=False)
-        max_bytes = max(max_bytes, len(response.encode("utf-8")))
-        max_tokens = max(max_tokens, len(encoder.encode(response)))
-        if expected.casefold() not in {row["name"].casefold() for row in results}:
-            failures.append((query, expected, [row["name"] for row in results]))
-    print(f"top-3: {len(CASES) - len(failures)}/{len(CASES)}; max JSON bytes: {max_bytes}; max cl100k tokens: {max_tokens}")
-    for failure in failures:
-        print("MISS", failure)
-    return 1 if failures or max_tokens >= 600 else 0
+    with tempfile.TemporaryDirectory() as temporary:
+        home = Path(temporary)
+        library = create_fixture(home)
+        refresh_index(home=home, library=library)
+        for query, kind, expected in CASES:
+            results = search(query, kind=kind, home=home, library=library)
+            names = [row["name"] for row in results]
+            max_bytes = max(max_bytes, len(json.dumps(results, ensure_ascii=False).encode("utf-8")))
+            if (expected is None and results) or (expected is not None and expected not in names):
+                misses.append((query, expected, names))
+    # A conservative byte ceiling keeps default result payloads compact without
+    # depending on a particular model's tokeniser or a native Python package.
+    print(f"top-3: {len(CASES) - len(misses)}/{len(CASES)}; max JSON bytes: {max_bytes}")
+    for miss in misses:
+        print("MISS", miss)
+    return 1 if misses or max_bytes >= 2400 else 0
 
 
 if __name__ == "__main__":
