@@ -138,7 +138,7 @@ def _dispatch(message: Any) -> dict[str, Any] | None:
             {
                 "protocolVersion": negotiated,
                 "capabilities": {"tools": {"listChanged": False}},
-                "serverInfo": {"name": "local-capability-finder", "version": "0.1.0"},
+                "serverInfo": {"name": "local-capability-finder", "version": "0.1.1"},
             },
         )
     if method == "ping":

@@ -11,8 +11,7 @@ to a release.
    CLI, Python runtime, README, LICENSE, and NOTICE, without local data.
 4. Tag the reviewed commit and create a GitHub release.
 5. Publish to npm manually only when the owner approves the package contents
-   and release version. Then update README installation commands to use the
-   published package name.
+   and release version. Confirm the published package and README on npm.
 
-The package name is `local-capability-finder-cli`. Check its availability in
-the npm registry again immediately before publication; availability can change.
+The package name is `local-capability-finder-cli`. Published name and version
+combinations cannot be reused.

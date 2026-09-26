@@ -1,7 +1,7 @@
 # Security policy
 
-The current `main` branch is the maintained version until releases are
-published. Older commits are not maintained separately.
+The latest npm release and current `main` branch are maintained. Older versions
+and commits are not maintained separately.
 
 ## Report a vulnerability
 

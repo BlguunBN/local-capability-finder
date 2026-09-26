@@ -20,7 +20,13 @@ current user's home directory.
 
 ## Install for agents
 
-Run in this folder on Windows:
+For interactive setup from npm:
+
+```sh
+npx local-capability-finder-cli add
+```
+
+To use a cloned checkout instead:
 
 ```powershell
 python install_agents.py --dry-run
@@ -43,10 +49,10 @@ need legacy fallback enabled.
 
 ### Interactive CLI
 
-From the cloned repository, run:
+From npm, run:
 
 ```powershell
-npx . add
+npx local-capability-finder-cli add
 ```
 
 `add` shows an interactive agent picker. Use arrow keys to move, space to select,
@@ -54,16 +60,16 @@ and Enter to confirm. It registers the same MCP server for the selected clients.
 The CLI also works without interaction:
 
 ```powershell
-npx . add --agent codex --agent cursor
-npx . --version
-npx . search "inspect a CAD file" --json
-npx . show skill:EXACT_ID
-npx . activate skill:EXACT_ID --agent codex
-npx . refresh
+npx local-capability-finder-cli add --agent codex --agent cursor
+npx local-capability-finder-cli --version
+npx local-capability-finder-cli search "inspect a CAD file" --json
+npx local-capability-finder-cli show skill:EXACT_ID
+npx local-capability-finder-cli activate skill:EXACT_ID --agent codex
+npx local-capability-finder-cli refresh
 ```
 
-Run `npx .` from the cloned repository; the package is not published to the npm
-registry. Use `node bin/capfind.js` instead if preferred. `setup` is an alias
+Run `npx .` from a cloned checkout, or use `node bin/capfind.js` there.
+`setup` is an alias
 for `add`. When run from a package installation outside a Git clone, setup
 copies the Python server to a stable user data directory before registering it,
 so the MCP configuration does not point into a temporary package cache.
@@ -73,34 +79,29 @@ starting Python.
 
 ### Setup prompt for a new agent
 
-Copy this prompt into a new agent's instructions after cloning the repository.
-The agent should use the clone's actual absolute path and its own client name.
+Copy this prompt into a new agent's instructions. The agent should use its own
+client name and install from npm, or use an existing checkout if available.
 
 ```text
-Set up and use the local capability finder in this repository.
+Set up and use local-capability-finder-cli.
 
 Location:
-- Project: the clone containing install_agents.py and capability_mcp.py
-- MCP server: capability_mcp.py in that clone
+- npm package: local-capability-finder-cli
 - MCP server name: local-capability-finder
-- Optional local MCP registry: mcp_servers.yaml in that clone (it may not exist)
 
-Find the clone's absolute path. If it is not available, ask for its location.
-Check whether local-capability-finder is already connected. If it is missing
-and you can edit your own MCP configuration, register it as a stdio server:
-  command: python
-  args: [<absolute path to this clone's capability_mcp.py>]
+Check whether local-capability-finder is already connected. If it is missing,
+register it with the CLI. Python 3.11+ and Node.js 18+ are required.
 
-For Codex, Claude Code, Gemini, Antigravity, Hermes, Cursor, OpenCode, or OMP on Windows, run
-this command from the clone's root and select agents in the interactive menu:
-  npx . add
+For Codex, Claude Code, Gemini, Antigravity, Hermes, Cursor, OpenCode, or OMP,
+run this command and select agents in the interactive menu:
+  npx local-capability-finder-cli add
 
 For automated setup, specify the client name directly:
-  npx . add --agent YOUR_AGENT_NAME
+  npx local-capability-finder-cli add --agent YOUR_AGENT_NAME
 
 Restart the agent after registration so it discovers the MCP tools. For other
-MCP clients, use their own configuration format with the same server command
-and argument.
+MCP clients, clone the repository and configure a stdio server with the absolute
+path to capability_mcp.py and a Python 3.11+ interpreter.
 
 When a task may need a specialized skill, MCP tool, or plugin:
 1. Call search_capabilities with a short description of the need. Keep its
