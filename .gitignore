@@ -1,0 +1,27 @@
+# Allowlist: never commit local skills, archives, indexes, or machine configs.
+*
+!.gitignore
+!README.md
+!AGENTS.md
+!LICENSE
+!NOTICE
+!RELEASING.md
+!CONTRIBUTING.md
+!SECURITY.md
+!package.json
+!.github/
+!.github/workflows/
+!.github/workflows/*.yml
+!bin/
+!bin/capfind.js
+!capability_finder.py
+!capability_mcp.py
+!skill_archive.py
+!library_catalog.py
+!find_skills.py
+!find-skills.cmd
+!organize_skills.py
+!install_agents.py
+!mcp_servers.example.yaml
+!tests/
+!tests/*.py

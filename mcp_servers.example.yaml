@@ -1,0 +1,7 @@
+mcp_servers:
+  local-capability-finder:
+    command: python
+    args:
+      - /path/to/ai-agent-library/capability_mcp.py
+    description: Search installed skills, MCP tools, and plugins by intent
+    enabled: true
