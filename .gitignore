@@ -31,3 +31,5 @@
 !docs/*.md
 !tests/
 !tests/*.py
+!tests/fixtures/
+!tests/fixtures/*.jsonl
