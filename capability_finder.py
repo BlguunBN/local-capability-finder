@@ -83,7 +83,9 @@ def _has(term: str, words: list[str]) -> bool:
 
 def _skill_entries(home: Path, library: Path) -> list[dict]:
     catalog = _read_json(library / "skills_index.json")
-    rows = catalog.get("skills", []) if isinstance(catalog, dict) else catalog
+    if not isinstance(catalog, dict) or not isinstance(catalog.get("skills"), list):
+        raise ValueError(f"skill catalog is malformed: {library / 'skills_index.json'}; run: library_catalog.py")
+    rows = catalog["skills"]
     rows = rows if isinstance(rows, list) else []
     archive = library / "on-demand"
     archived_owners = {}
@@ -558,6 +560,7 @@ def refresh_index(probe_tools: bool = False, home: Path | None = None, library: 
         tmp = Path(fh.name)
     os.replace(tmp, dest)
     _read_index.cache_clear()
+    _TOKEN_CACHE.clear()
     return payload
 
 
@@ -614,6 +617,75 @@ def _load(home: Path | None, library: Path | None) -> dict:
     return payload
 
 
+BM25_K1 = 1.2
+BM25_B = 0.75
+FIELD_WEIGHTS = (("name", 8.0), ("category", 2.0), ("description", 1.0), ("aliases", 3.0))
+SYNONYMS = {
+    "k8s": ["kubernetes"], "k9s": ["kubernetes"],
+    "js": ["javascript"], "ts": ["typescript"], "py": ["python"],
+    "gh": ["github"], "db": ["database"], "auth": ["authentication"],
+    "config": ["configuration"], "docs": ["documentation"],
+    "perf": ["performance"], "repo": ["repository"], "env": ["environment"],
+    "tf": ["terraform"], "cicd": ["ci", "cd"],
+}
+
+_TOKEN_CACHE: dict = {}
+
+
+def _tf(term: str, tokens: list[str]) -> int:
+    return sum(1 for word in tokens
+               if term == word or (len(term) >= 5 and word.startswith(term))
+               or (len(term) >= 2 and not term.isascii() and term in word))
+
+
+def _field_tokens(item: dict) -> tuple[list[str], list[str], list[str], list[str]]:
+    return (_tokens(item["name"]), _tokens(item.get("category", "")),
+            _tokens(item.get("description", "")),
+            _tokens(" ".join(map(str, item.get("aliases", [])))))
+
+
+def _corpus(home: Path | None, library: Path | None, kind: str | None) -> tuple[list, dict]:
+    """Tokenized candidates + BM25 corpus stats, cached per index file."""
+    home, library = _paths(home, library)
+    path = library / "capabilities_index.json"
+    try:
+        stat = path.stat()
+    except OSError:
+        stat = None
+    stamp = (stat.st_mtime_ns if stat else 0, stat.st_size if stat else 0)
+    cached = _TOKEN_CACHE.get((str(path), kind))
+    if cached is not None and cached[0] == (str(home), stamp):
+        return cached[1]
+    catalog = _load(home, library)
+    docs = []
+    for item in catalog["capabilities"]:
+        if kind and item["type"] != kind:
+            continue
+        docs.append((item, _field_tokens(item)))
+    totals = [0.0] * len(FIELD_WEIGHTS)
+    for _, fields in docs:
+        for index, tokens in enumerate(fields):
+            totals[index] += len(tokens)
+    count = max(len(docs), 1)
+    stats = {"count": len(docs), "avg": [value / count for value in totals]}
+    _TOKEN_CACHE.clear()
+    _TOKEN_CACHE[(str(path), kind)] = ((str(home), stamp), (docs, stats))
+    return docs, stats
+
+
+def _compact_row(item: dict, matched: set, active_stores: set) -> dict:
+    reason = _short(item.get("description") or item.get("category") or "Local capability", 90)
+    available = item["availability"]
+    if item["type"] == "skill" and len(active_stores) > 1 and active_stores <= set(available):
+        available = ["all"]
+    elif item["type"] == "skill" and len(active_stores) > 1 and len(available) >= 6:
+        missing = active_stores - set(available)
+        if len(missing) <= 2:
+            available = ["all active except " + ", ".join(sorted(missing))]
+    return {"id": item["id"], "type": item["type"], "name": item["name"],
+            "reason": reason, "availability": available, "matched": sorted(matched)}
+
+
 def search(query: str, kind: str | None = None, limit: int = 3, home: Path | None = None,
            library: Path | None = None, agent: str | None = None,
            project_hint: str | None = None) -> list[dict]:
@@ -626,39 +698,66 @@ def search(query: str, kind: str | None = None, limit: int = 3, home: Path | Non
     terms = list(dict.fromkeys(_tokens(query)))
     if not terms:
         return []
+    expansions = [(syn, 0.5) for term in terms for syn in SYNONYMS.get(term, [])
+                  if syn not in terms]
     context_terms = list(dict.fromkeys(_tokens(project_hint or "")))[:10]
-    catalog = _load(home, library)
-    candidates = [item for item in catalog["capabilities"] if not kind or item["type"] == kind]
-    active_stores = set(catalog.get("active_skill_stores", []))
-    tokenized = []
-    frequencies = {term: 0 for term in terms}
-    for item in candidates:
-        name = _tokens(item["name"])
-        category = _tokens(item.get("category", ""))
-        desc = _tokens(item.get("description", ""))
-        aliases = _tokens(" ".join(map(str, item.get("aliases", []))))
-        matches = [tuple(_has(term, field) for field in (name, category, desc, aliases)) for term in terms]
-        tokenized.append((item, name, matches))
-        for term, matched in zip(terms, matches):
-            if any(matched):
-                frequencies[term] += 1
+    docs, stats = _corpus(home, library, kind)
+    count = stats["count"]
+    if count == 0:
+        return []
+    catalog_active = _load(home, library).get("active_skill_stores", [])
+    active_stores = set(catalog_active)
+    want = query.strip().casefold()
+    exact_id_hit = None
+    for item, _ in docs:
+        legacy = [entry.casefold() for entry in item.get("legacy_ids", [])]
+        if item["id"].casefold() == want or want in legacy:
+            exact_id_hit = item
+            break
+    query_terms = [(term, 1.0) for term in terms] + expansions
+    doc_freq = [[0] * len(FIELD_WEIGHTS) for _ in query_terms]
+    term_hits = []
+    for _, fields in docs:
+        per_term = []
+        for position, (qterm, _) in enumerate(query_terms):
+            counts = [_tf(qterm, tokens) for tokens in fields]
+            per_term.append(counts)
+            for index, value in enumerate(counts):
+                if value:
+                    doc_freq[position][index] += 1
+        term_hits.append(per_term)
     scored = []
-    for item, name, matches in tokenized:
-        hits = sum(any(matched) for matched in matches)
-        name_hit = any(matched[0] for matched in matches)
-        alias_hit = any(matched[3] for matched in matches)
-        if not name_hit and (hits < math.ceil(len(terms) / 3) or (len(terms) > 1 and hits == 1 and not alias_hit)):
+    for (item, fields), per_term in zip(docs, term_hits):
+        matched: set[str] = set()
+        score = 0.0
+        for (qterm, qweight), dfs, counts in zip(query_terms, doc_freq, per_term):
+            for index, ((field, weight), term_freq, df) in enumerate(zip(FIELD_WEIGHTS, counts, dfs)):
+                if not term_freq:
+                    continue
+                length = len(fields[index])
+                avg = stats["avg"][index]
+                idf = math.log(1 + (count - df + 0.5) / (df + 0.5))
+                denom = term_freq + BM25_K1 * (1 - BM25_B + BM25_B * (length / avg if avg else 1))
+                score += qweight * weight * idf * (term_freq * (BM25_K1 + 1)) / denom
+                matched.add(field)
+        name_hit = any(per_term[i][0] for i in range(len(terms)))
+        alias_hit = any(per_term[i][3] for i in range(len(terms)))
+        syn_anchor = any(per_term[len(terms) + s][0] or per_term[len(terms) + s][3]
+                         for s in range(len(expansions))) if expansions else False
+        syn_any = any(any(per_term[len(terms) + s]) for s in range(len(expansions))) if expansions else False
+        hits = sum(1 for i in range(len(terms)) if any(per_term[i]))
+        if not (name_hit or alias_hit or syn_anchor) and (
+                hits < math.ceil(len(terms) / 3) or (len(terms) > 1 and hits == 1 and not alias_hit)):
             continue
-        score = sum((1 + math.log((len(candidates) + 1) / (frequencies[term] + 1))) *
-                    sum(weight for weight, found in zip((8, 2, 1, 3), matched) if found)
-                    for term, matched in zip(terms, matches))
-        score += 8 * hits / len(terms) + item.get("quality", 0)
+        effective = hits or (0.5 if syn_any else 0)
+        score += 8 * effective / len(terms) + item.get("quality", 0)
         if item["type"] == "skill":
             score += 1
-        if name == terms:
+        if _tokens(item["name"]) == terms:
             score += 12
-        score *= (hits / len(terms)) ** 2
+        score *= (effective / len(terms)) ** 2
         if context_terms:
+            name = _tokens(item["name"])
             category = _tokens(item.get("category", ""))
             description = _tokens(item.get("description", ""))
             aliases = _tokens(" ".join(map(str, item.get("aliases", []))))
@@ -676,26 +775,19 @@ def search(query: str, kind: str | None = None, limit: int = 3, home: Path | Non
                 score += 2
             elif item["type"] == "plugin" or (item["type"] == "tool" and availability):
                 score -= 4
-        reason = _short(item.get("description") or item.get("category") or "Local capability", 90)
-        available = item["availability"]
-        if item["type"] == "skill" and len(active_stores) > 1 and active_stores <= set(available):
-            available = ["all"]
-        elif item["type"] == "skill" and len(active_stores) > 1 and len(available) >= 6:
-            missing = active_stores - set(available)
-            if len(missing) <= 2:
-                available = ["all active except " + ", ".join(sorted(missing))]
-        scored.append((score, item["name"].casefold(), {"id": item["id"], "type": item["type"],
-                                                     "name": item["name"], "reason": reason,
-                                                     "availability": available}))
-    best: dict[str, tuple[float, str, dict]] = {}
+        scored.append((score, item["name"].casefold(), item, matched))
+    best: dict[str, tuple[float, str, dict, set]] = {}
     for entry in scored:
-        score, name, row = entry
+        score, name, row, matched = entry
         previous = best.get(name)
-        if previous is None or (score, row["type"] == "skill") > (previous[0], previous[2]["type"] == "skill"):
+        if previous is None or score > previous[0]:
             best[name] = entry
-    return [row for _, _, row in sorted(best.values(), key=lambda x: (-x[0], x[1]))[:limit]]
-
-
+    rows = [_compact_row(item, matched, active_stores) for _, _, item, matched in
+            sorted(best.values(), key=lambda x: (-x[0], x[1]))]
+    if exact_id_hit is not None:
+        rows = [row for row in rows if row["id"] != exact_id_hit["id"]]
+        rows.insert(0, _compact_row(exact_id_hit, {"exact"}, active_stores))
+    return rows[:limit]
 def show(capability_id: str, home: Path | None = None, library: Path | None = None) -> dict | None:
     capabilities = _load(home, library)["capabilities"]
     for item in capabilities:

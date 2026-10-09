@@ -207,11 +207,23 @@ def category_of(root: str, skill_dir: str) -> str:
     return "(top-level)"
 
 
+def _previous_state(library: str | None = None) -> dict:
+    """Parse results cached from the last catalog write, keyed by real path."""
+    try:
+        with open(os.path.join(library or LIBRARY, "skills_index.json"), encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return {}
+    state = data.get("file_state", {}) if isinstance(data, dict) else {}
+    return state if isinstance(state, dict) else {}
+
+
 def collect(library: str | None = None) -> tuple[list[dict], dict[str, int]]:
     """Walk every root, dedupe by real path, return (skills, per-root counts)."""
     by_realpath: dict[str, dict] = {}
     name_owner: dict[str, str] = {}
     counts: dict[str, int] = {}
+    previous = _previous_state(library)
 
     for root_name, root in _ordered_roots(library):
         found = 0
@@ -227,6 +239,12 @@ def collect(library: str | None = None) -> tuple[list[dict], dict[str, int]]:
             skill_md = os.path.join(dirpath, "SKILL.md")
             real = os.path.realpath(skill_md)
             found += 1
+            try:
+                stat = os.stat(skill_md)
+            except OSError as exc:
+                print(f"  ! unreadable: {skill_md} ({exc})", file=sys.stderr)
+                continue
+            stat_key = [stat.st_mtime_ns, stat.st_size]
 
             if real in by_realpath:
                 # Same physical file already cataloged: record the alias only.
@@ -235,16 +253,25 @@ def collect(library: str | None = None) -> tuple[list[dict], dict[str, int]]:
                     entry["roots"].append(root_name)
                 continue
 
-            try:
-                with open(skill_md, "rb") as handle:
-                    raw = handle.read()
-            except OSError as exc:
-                print(f"  ! unreadable: {skill_md} ({exc})", file=sys.stderr)
-                continue
-            text = raw.decode("utf-8", errors="replace")
-
-            fm_name, description = parse_frontmatter(text)
-            meta = parse_metadata(text)
+            cached = previous.get(real)
+            if isinstance(cached, dict) and cached.get("stat") == stat_key:
+                fm_name, description = cached.get("name"), cached.get("description", "")
+                meta = {"version": cached.get("version"),
+                        "tags": cached.get("tags", []),
+                        "compatible_agents": cached.get("compatible_agents", []),
+                        "requirements": cached.get("requirements", []),
+                        "content_hash": cached.get("content_hash")}
+            else:
+                try:
+                    with open(skill_md, "rb") as handle:
+                        raw = handle.read()
+                except OSError as exc:
+                    print(f"  ! unreadable: {skill_md} ({exc})", file=sys.stderr)
+                    continue
+                text = raw.decode("utf-8", errors="replace")
+                fm_name, description = parse_frontmatter(text)
+                meta = parse_metadata(text)
+                meta["content_hash"] = "sha256:" + hashlib.sha256(raw).hexdigest()
             dir_name = os.path.basename(dirpath)
             name = fm_name or dir_name
 
@@ -265,7 +292,9 @@ def collect(library: str | None = None) -> tuple[list[dict], dict[str, int]]:
                 "tags": meta["tags"],
                 "compatible_agents": meta["compatible_agents"],
                 "requirements": meta["requirements"],
-                "content_hash": "sha256:" + hashlib.sha256(raw).hexdigest(),
+                "content_hash": meta["content_hash"],
+                "realpath": real,
+                "stat": stat_key,
             }
 
         counts[root_name] = found
@@ -300,6 +329,15 @@ def write_json(skills: list[dict], counts: dict[str, int]) -> str:
         "counts_by_root": counts,
         "count": len(skills),
         "skills": skills,
+        "file_state": {
+            s["realpath"]: {"stat": s.get("stat"), "name": s.get("name"),
+                            "description": s.get("description", ""),
+                            "version": s.get("version"), "tags": s.get("tags", []),
+                            "compatible_agents": s.get("compatible_agents", []),
+                            "requirements": s.get("requirements", []),
+                            "content_hash": s.get("content_hash")}
+            for s in skills if isinstance(s, dict) and s.get("realpath")
+        },
     }
     out = os.path.join(LIBRARY, "skills_index.json")
     _atomic_write(out, json.dumps(payload, indent=2, ensure_ascii=False) + "\n")

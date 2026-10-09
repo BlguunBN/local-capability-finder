@@ -23,6 +23,27 @@ synthetic fixture unless noted. No user skill files were touched.
 - Live user index on this machine reports **stale** (source files moved
   since last refresh) instead of serving silently outdated results.
 
+## P3 changes (2026-10-10, branch `capfind/plan-implementation`)
+
+- Search is now true BM25 (k1=1.2, b=0.75, per-field tf/idf with length
+  normalization, field weights name 8 / category 2 / description 1 /
+  aliases 3) over the previous weighted-keyword scorer. Agent, project-hint,
+  quality, and exact-name bonuses are unchanged.
+- Added technical synonym expansion (`k8s`→`kubernetes`, `ts`→`typescript`,
+  …), exact-ID lookup (canonical or legacy returns that record first), and a
+  `matched` field per result naming the contributing fields. Rows stay
+  lightweight (no bodies).
+- `collect()` skips unchanged files by (mtime, size) against the previous
+  `file_state`; refresh stays atomic and a failed refresh keeps the last
+  good `capabilities_index.json`.
+- Retrieval benchmark: 105/105 labeled cases, fixture p50 1.7ms / p95 2.8ms.
+  Live 5,816-record catalog: warm p50 ~104ms / p95 ~160ms — above the
+  plan's 10k/<100ms aspiration. Reaching it needs a refresh-time inverted
+  index (deferred; query-time scoring is correct but linear).
+- Deferred: continuous file watching (an always-on daemon is out of scope
+  for the first release); staleness detection + explicit refresh + hash-skip
+  is the mechanism. Embeddings stay opt-out (no benchmark justified them).
+
 ## P2 changes (2026-10-10, branch `capfind/plan-implementation`)
 
 - Canonical skill IDs `<source>:skill:<slug>` (e.g.

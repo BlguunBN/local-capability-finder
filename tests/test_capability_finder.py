@@ -83,7 +83,7 @@ class CapabilityFinderTests(unittest.TestCase):
         self.assertEqual("cad-viewer", skills[0]["name"])
         self.assertLessEqual(len(skills), 3)
         self.assertEqual(
-            {"id", "type", "name", "reason", "availability"}, set(skills[0])
+            {"id", "type", "name", "reason", "availability", "matched"}, set(skills[0])
         )
         self.assertEqual(
             str(self.skill / "SKILL.md"),
