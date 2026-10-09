@@ -24,6 +24,8 @@ def _tool_definitions() -> list[dict[str, Any]]:
                     "query": {"type": "string", "description": "Natural-language capability need."},
                     "kind": {"type": "string", "description": "Optional type filter, such as skill, tool, or plugin."},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 20, "default": 3},
+                    "agent": {"type": "string", "description": "Optional calling agent for variant selection."},
+                    "project_hint": {"type": "string", "description": "Optional short project technology hint."},
                 },
                 "required": ["query"],
                 "additionalProperties": False,
@@ -73,7 +75,15 @@ def _call_tool(name: str, arguments: Any) -> Any:
         limit = arguments.get("limit", 3)
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 20:
             raise ValueError("limit must be an integer from 1 to 20")
-        return capability_finder.search(query.strip(), kind=kind, limit=limit)
+        agent = arguments.get("agent")
+        if agent is not None and (not isinstance(agent, str) or not agent.strip()):
+            raise ValueError("agent must be a non-empty string")
+        project_hint = arguments.get("project_hint")
+        if project_hint is not None and (not isinstance(project_hint, str) or len(project_hint) > 200):
+            raise ValueError("project_hint must be a string of at most 200 characters")
+        return capability_finder.search(
+            query.strip(), kind=kind, limit=limit, agent=agent, project_hint=project_hint
+        )
 
     if name == "get_capability":
         capability_id = arguments.get("capability_id")

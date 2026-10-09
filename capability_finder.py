@@ -475,14 +475,19 @@ def _load(home: Path | None, library: Path | None) -> dict:
     return payload
 
 
-def search(query: str, kind: str | None = None, limit: int = 3, home: Path | None = None, library: Path | None = None) -> list[dict]:
+def search(query: str, kind: str | None = None, limit: int = 3, home: Path | None = None,
+           library: Path | None = None, agent: str | None = None,
+           project_hint: str | None = None) -> list[dict]:
     if kind not in (None, "skill", "tool", "plugin"):
         raise ValueError("kind must be skill, tool, or plugin")
     if not 1 <= limit <= 20:
         raise ValueError("limit must be 1..20")
+    if agent is not None and agent not in AGENT_DIRS:
+        raise ValueError(f"unknown agent: {agent}")
     terms = list(dict.fromkeys(_tokens(query)))
     if not terms:
         return []
+    context_terms = list(dict.fromkeys(_tokens(project_hint or "")))[:10]
     catalog = _load(home, library)
     candidates = [item for item in catalog["capabilities"] if not kind or item["type"] == kind]
     active_stores = set(catalog.get("active_skill_stores", []))
@@ -514,6 +519,24 @@ def search(query: str, kind: str | None = None, limit: int = 3, home: Path | Non
         if name == terms:
             score += 12
         score *= (hits / len(terms)) ** 2
+        if context_terms:
+            category = _tokens(item.get("category", ""))
+            description = _tokens(item.get("description", ""))
+            aliases = _tokens(" ".join(map(str, item.get("aliases", []))))
+            score += min(4, sum(2 if _has(term, name) else 1 if _has(term, category)
+                                or _has(term, aliases) else 0.5 if _has(term, description) else 0
+                                for term in context_terms))
+        if agent:
+            availability = set(item.get("availability", []))
+            owners = {variant.get("store") for variant in item.get("variants", [])}
+            if agent in availability:
+                score += 8
+            elif item["type"] == "skill" and "agents" in availability:
+                score += 6
+            elif item["type"] == "skill" and "on-demand" in availability and agent in owners:
+                score += 2
+            elif item["type"] == "plugin" or (item["type"] == "tool" and availability):
+                score -= 4
         reason = _short(item.get("description") or item.get("category") or "Local capability", 90)
         available = item["availability"]
         if item["type"] == "skill" and len(active_stores) > 1 and active_stores <= set(available):
@@ -609,6 +632,8 @@ def main(argv: list[str] | None = None) -> int:
     find.add_argument("query")
     find.add_argument("--kind", choices=("skill", "tool", "plugin"))
     find.add_argument("--limit", type=int, default=3)
+    find.add_argument("--agent", choices=sorted(AGENT_DIRS))
+    find.add_argument("--project-hint", help="short optional project technology hint")
     find.add_argument("--json", action="store_true")
     detail = sub.add_parser("show")
     detail.add_argument("id")
@@ -621,7 +646,7 @@ def main(argv: list[str] | None = None) -> int:
             data = refresh_index(args.probe_tools)
             print(json.dumps({"indexed": len(data["capabilities"]), "path": str(_paths(None, None)[1] / "capabilities_index.json")}))
         elif args.command == "search":
-            rows = search(args.query, args.kind, args.limit)
+            rows = search(args.query, args.kind, args.limit, agent=args.agent, project_hint=args.project_hint)
             if args.json:
                 print(json.dumps(rows, ensure_ascii=False))
             else:

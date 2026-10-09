@@ -59,6 +59,21 @@ class MCPProtocolTests(unittest.TestCase):
         self.assertEqual(-32022, unsupported["error"]["code"])
         self.assertEqual({"requested": "2099-01-01", "supported": ["2026-07-28"]}, unsupported["error"]["data"])
 
+    def test_search_forwards_agent_and_project_hint(self):
+        with patch("capability_finder.search", return_value=[]) as search:
+            capability_mcp._call_tool("search_capabilities", {
+                "query": "deploy workers", "kind": "skill", "agent": "codex",
+                "project_hint": "Cloudflare Workers", "limit": 3,
+            })
+        search.assert_called_once_with(
+            "deploy workers", kind="skill", limit=3,
+            agent="codex", project_hint="Cloudflare Workers",
+        )
+        with self.assertRaisesRegex(ValueError, "project_hint"):
+            capability_mcp._call_tool("search_capabilities", {
+                "query": "deploy workers", "project_hint": "x" * 201,
+            })
+
     def test_legacy_handshake_and_progress_metadata_remain_supported(self):
         initialized = capability_mcp._dispatch(request("initialize", {"protocolVersion": "2025-11-25"}))
         self.assertEqual("2025-11-25", initialized["result"]["protocolVersion"])
