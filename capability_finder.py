@@ -128,7 +128,9 @@ def _skill_entries(home: Path, library: Path) -> list[dict]:
                             "name": name, "description": _short(row.get("description", ""), 300),
                             "category": str(row.get("category", "")), "source_path": str(md),
                             "variants": [], "availability": [], "aliases": [], "quality": 0,
-                            "owner_stores": [], "observed_active": []}
+                            "owner_stores": [], "observed_active": [],
+                            "origin_store": store, "version": None, "tags": [],
+                            "compatible_agents": [], "requirements": [], "row_hash": None}
         item = grouped[key]
         for owner in row.get("roots", [store]):
             if owner not in item["owner_stores"]:
@@ -140,6 +142,12 @@ def _skill_entries(home: Path, library: Path) -> list[dict]:
         if row.get("canonical") and store != "archive":
             item["source_path"] = str(md)
             item["quality"] = 1
+            item["origin_store"] = store
+            for field in ("version", "tags", "compatible_agents", "requirements"):
+                if row.get(field) is not None:
+                    item[field] = row[field]
+            if row.get("content_hash"):
+                item["row_hash"] = row["content_hash"]
     for item in grouped.values():
         item["variants"].sort(key=lambda v: (v["store"] == "archive", v["store"], v["path"]))
     # A matching SKILL.md alone does not prove that scripts or references match.
@@ -148,7 +156,7 @@ def _skill_entries(home: Path, library: Path) -> list[dict]:
         owner = min(item.pop("owner_stores"), key=lambda value: (owner_order.get(value, 50), value))
         if owner == "plugin-cache":
             owner = "codex"  # Preserve IDs created before plugin-cache had its own root label.
-        item["id"] = _id("skill", f"{name}:{owner}")
+        item["legacy_id"] = _id("skill", f"{name}:{owner}")
         item["availability"] = item.pop("observed_active")
         for agent, subdir in AGENT_DIRS.items():
             md = home / subdir / item["name"] / "SKILL.md"
@@ -160,12 +168,142 @@ def _skill_entries(home: Path, library: Path) -> list[dict]:
         if not item["availability"]:
             item["availability"] = ["on-demand"]
     # Rare same-name, same-owner variants still need distinct exact IDs.
-    used_ids: set[str] = set()
+    used_legacy: set[str] = set()
     for item in sorted(grouped.values(), key=lambda value: (value["name"].casefold(), value["source_path"])):
-        if item["id"] in used_ids:
-            item["id"] = _id("skill", f"{item['id']}:{item['source_path'].casefold()}")
-        used_ids.add(item["id"])
+        legacy = item["legacy_id"]
+        if legacy in used_legacy:
+            legacy = _id("skill", f"{legacy}:{item['source_path'].casefold()}")
+        used_legacy.add(legacy)
+        item["legacy_id"] = legacy
+    _assign_canonical_ids(grouped, home, library)
     return list(grouped.values())
+
+
+def _content_hash(path: str) -> str | None:
+    try:
+        digest = hashlib.sha256()
+        with open(path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return "sha256:" + digest.hexdigest()
+    except OSError:
+        return None
+
+
+def _registered_source_map(library: Path) -> dict[str, dict]:
+    try:
+        from library_catalog import load_sources
+    except ImportError:
+        return {}
+    try:
+        return {s["id"]: s for s in load_sources(str(library)) if isinstance(s, dict)}
+    except (OSError, ValueError):
+        return {}
+
+
+def _source_trust(library: Path) -> dict[str, str]:
+    trust = {store: "approved" for store in AGENT_DIRS}
+    trust.update({"library": "approved", "catalog": "approved",
+                  "plugin-cache": "approved", "archive": "approved"})
+    for source_id, source in _registered_source_map(library).items():
+        trust[source_id] = source.get("trust", "unscanned")
+    return trust
+
+
+def _lock_path(library: Path) -> Path:
+    return library / "activations-lock.json"
+
+
+def _read_lock(library: Path) -> dict:
+    data = _read_json(_lock_path(library))
+    if isinstance(data, dict) and isinstance(data.get("entries"), list):
+        return data
+    return {"schema_version": 1, "entries": []}
+
+
+def _write_lock(library: Path, lock: dict) -> None:
+    dest = _lock_path(library)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=dest.parent,
+                                     prefix=".activations-lock-", suffix=".json", delete=False) as fh:
+        json.dump(lock, fh, ensure_ascii=False, indent=2)
+        tmp = Path(fh.name)
+    os.replace(tmp, dest)
+
+
+def _upsert_lock(library: Path, entry: dict) -> None:
+    lock = _read_lock(library)
+    lock["entries"] = [e for e in lock["entries"]
+                       if not (isinstance(e, dict) and e.get("id") == entry["id"]
+                               and e.get("agent") == entry["agent"])]
+    lock["entries"].append(entry)
+    _write_lock(library, lock)
+
+
+def _remove_lock(library: Path, ids: tuple[str, ...], agent: str) -> None:
+    lock = _read_lock(library)
+    lock["entries"] = [e for e in lock["entries"]
+                       if not (isinstance(e, dict) and e.get("id") in ids
+                               and e.get("agent") == agent)]
+    _write_lock(library, lock)
+
+
+def _assign_canonical_ids(grouped: dict, home: Path, library: Path) -> None:
+    """Stable `<source>:skill:<name>` identities; content changes hash, not ID."""
+    registered = _registered_source_map(library)
+    trust = _source_trust(library)
+    order = {"agents": 0, "library": 1, "gemini": 2, "claude": 3,
+             "openclaw": 4, "codex": 5, "archive": 99}
+    buckets: dict[tuple[str, str], list[dict]] = {}
+    for item in grouped.values():
+        stores = {v["store"] for v in item["variants"]}
+        origin = item.get("origin_store")
+        if origin not in stores:
+            origin = min(stores, key=lambda s: (registered.get(s, {}).get("priority",
+                                 order.get(s, 50)), s))
+        item["source_id"] = origin
+        item["schema_version"] = 1
+        item["trust_status"] = trust.get(origin, "unscanned")
+        try:
+            archived = (library / "on-demand") in Path(item["source_path"]).parents
+        except (OSError, ValueError):
+            archived = False
+        item["installation_state"] = "archived" if archived else "available"
+        buckets.setdefault((origin, item["name"]), []).append(item)
+    for (origin, name), members in buckets.items():
+        members.sort(key=lambda m: m["source_path"])
+        for index, item in enumerate(members):
+            base = f"{origin}:skill:{name}"
+            if index == 0:
+                item["id"] = base
+            else:
+                suffix = hashlib.sha256(item["source_path"].casefold().encode()).hexdigest()[:8]
+                item["id"] = f"{base}:{suffix}"
+            item["legacy_ids"] = [item.pop("legacy_id")]
+    lock = _read_lock(library)
+    for item in grouped.values():
+        item["content_hash"] = _content_hash(item["source_path"])
+        targets = []
+        for entry in lock.get("entries", []):
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("id") in (item["id"], *item["legacy_ids"]) and entry.get("agent"):
+                targets.append({"agent": entry["agent"], "path": entry.get("path"),
+                                "method": entry.get("method", "symlink"),
+                                "revision": entry.get("revision")})
+        for agent in item["availability"]:
+            if agent not in AGENT_DIRS or agent == "on-demand":
+                continue
+            if any(target["agent"] == agent for target in targets):
+                continue
+            probe = home / AGENT_DIRS[agent] / item["name"] / "SKILL.md"
+            try:
+                if probe.is_file():
+                    targets.append({"agent": agent, "path": str(probe.parent),
+                                    "method": "unmanaged", "revision": None})
+            except OSError:
+                pass
+        item["managed_targets"] = targets
 
 
 def _mcp_configs(home: Path, library: Path) -> list[tuple[str, Path, dict]]:
@@ -561,7 +699,7 @@ def search(query: str, kind: str | None = None, limit: int = 3, home: Path | Non
 def show(capability_id: str, home: Path | None = None, library: Path | None = None) -> dict | None:
     capabilities = _load(home, library)["capabilities"]
     for item in capabilities:
-        if item["id"] == capability_id:
+        if item["id"] == capability_id or capability_id in item.get("legacy_ids", []):
             detail = dict(item)
             if item["type"] == "skill":
                 detail["usage"] = f"Read the SKILL.md at {item['source_path']}; activate by exact ID only if this agent requires an active skill folder."
@@ -574,6 +712,8 @@ def show(capability_id: str, home: Path | None = None, library: Path | None = No
                 detail["usage"] = "Use the named MCP server/tool if configured for this agent; source_path identifies its local config or discovery CLI."
             else:
                 detail["usage"] = "Use through the installed Codex plugin; source_path identifies its manifest."
+            if item["type"] == "skill" and not Path(item["source_path"]).is_file():
+                detail["installation_state"] = "broken"
             return detail
     return None
 
@@ -630,16 +770,22 @@ def _write_activation_manifest(path: Path, manifest: dict) -> None:
     os.replace(tmp, path)
 
 
-def _adopt_activation_manifest(manifest_path: Path, plan: dict) -> None:
-    if manifest_path.is_file():
-        return
-    target = Path(plan["target"])
-    _write_activation_manifest(manifest_path, {
-        "format": 1, "status": "applied", "stage": "adopted",
-        "id": plan["id"], "agent": plan["agent"], "name": plan["name"],
-        "source": plan["source"], "target": plan["target"],
-        "link_kind": _managed_link_kind(target), "created_at_epoch": time.time(),
-    })
+def _adopt_activation_manifest(library: Path, manifest_path: Path, plan: dict) -> None:
+    if not manifest_path.is_file():
+        target = Path(plan["target"])
+        _write_activation_manifest(manifest_path, {
+            "format": 1, "status": "applied", "stage": "adopted",
+            "id": plan["id"], "agent": plan["agent"], "name": plan["name"],
+            "source": plan["source"], "target": plan["target"],
+            "link_kind": _managed_link_kind(target), "created_at_epoch": time.time(),
+        })
+    lock = _read_lock(library)
+    if not any(isinstance(e, dict) and e.get("id") == plan["id"]
+               and e.get("agent") == plan["agent"] for e in lock["entries"]):
+        _upsert_lock(library, {"id": plan["id"], "revision": plan.get("revision"),
+                               "agent": plan["agent"], "path": plan["target"],
+                               "method": _managed_link_kind(Path(plan["target"])),
+                               "installed_at_epoch": time.time()})
 
 
 def preview_activation(capability_id: str, agent: str, home: Path | None = None, library: Path | None = None) -> dict:
@@ -655,7 +801,8 @@ def preview_activation(capability_id: str, agent: str, home: Path | None = None,
     src = Path(chosen["path"])
     name = _validate_skill_name(item["name"])
     target = home / AGENT_DIRS[agent] / name
-    plan = {"id": capability_id, "agent": agent, "name": name,
+    plan = {"id": item["id"], "requested_id": capability_id, "agent": agent, "name": name,
+            "revision": item.get("content_hash"),
             "source": str(src), "target": str(target),
             "method": "symlink" if os.name != "nt" else "symlink, junction fallback",
             "manifest": str(_activation_manifest_path(library, agent, name)),
@@ -694,12 +841,12 @@ def activate(capability_id: str, agent: str, home: Path | None = None, library: 
             raise FileExistsError(plan["conflict"])
         raise FileNotFoundError(plan["conflict"])
     if plan["status"] == "already_active":
-        _adopt_activation_manifest(manifest_path, plan)
-        return {"status": "already_active", "id": capability_id, "agent": agent, "path": plan["target"]}
+        _adopt_activation_manifest(library, manifest_path, plan)
+        return {"status": "already_active", "id": plan["id"], "agent": agent, "path": plan["target"]}
     src, target = Path(plan["source"]), Path(plan["target"])
     target.parent.mkdir(parents=True, exist_ok=True)
     manifest = {"format": 1, "status": "applying", "stage": "link",
-                "id": capability_id, "agent": agent, "name": plan["name"],
+                "id": plan["id"], "agent": agent, "name": plan["name"],
                 "source": plan["source"], "target": plan["target"],
                 "link_kind": None, "created_at_epoch": time.time()}
     created = False
@@ -709,8 +856,8 @@ def activate(capability_id: str, agent: str, home: Path | None = None, library: 
             created = True
         except FileExistsError:
             if _points_at(target, src):
-                _adopt_activation_manifest(manifest_path, plan)
-                return {"status": "already_active", "id": capability_id, "agent": agent, "path": plan["target"]}
+                _adopt_activation_manifest(library, manifest_path, plan)
+                return {"status": "already_active", "id": plan["id"], "agent": agent, "path": plan["target"]}
             raise FileExistsError(f"refusing to overwrite existing skill: {target}")
         except OSError:
             if os.name == "nt":
@@ -724,6 +871,10 @@ def activate(capability_id: str, agent: str, home: Path | None = None, library: 
         manifest["stage"] = "verified"
         manifest["link_kind"] = _managed_link_kind(target)
         _write_activation_manifest(manifest_path, manifest)
+        _upsert_lock(library, {"id": plan["id"], "revision": plan.get("revision"),
+                               "agent": agent, "path": plan["target"],
+                               "method": manifest["link_kind"],
+                               "installed_at_epoch": time.time()})
     except Exception as exc:
         manifest["status"] = "failed"
         manifest["error"] = str(exc)
@@ -737,7 +888,7 @@ def activate(capability_id: str, agent: str, home: Path | None = None, library: 
         _write_activation_manifest(manifest_path, manifest)
         raise
     refresh_index(home=home, library=library)
-    return {"status": "activated", "id": capability_id, "agent": agent, "path": plan["target"]}
+    return {"status": "activated", "id": plan["id"], "agent": agent, "path": plan["target"]}
 
 
 def deactivate_skill(capability_id: str, agent: str, home: Path | None = None, library: Path | None = None) -> dict:
@@ -752,10 +903,11 @@ def deactivate_skill(capability_id: str, agent: str, home: Path | None = None, l
     manifest_path = _activation_manifest_path(library, agent, name)
     manifest = _read_json(manifest_path)
     target = home / AGENT_DIRS[agent] / name
-    result = {"status": "deactivated", "id": capability_id, "agent": agent, "path": str(target)}
+    result = {"status": "deactivated", "id": item["id"], "agent": agent, "path": str(target)}
     if not os.path.lexists(target):
         if isinstance(manifest, dict):
             manifest_path.unlink(missing_ok=True)
+        _remove_lock(library, (item["id"], *item.get("legacy_ids", [])), agent)
         result["status"] = "already_removed"
         return result
     if not isinstance(manifest, dict) or manifest.get("status") not in ("applied", "failed"):
@@ -771,6 +923,7 @@ def deactivate_skill(capability_id: str, agent: str, home: Path | None = None, l
     else:
         raise FileExistsError(f"activation drift: {target} no longer points at the recorded source")
     manifest_path.unlink(missing_ok=True)
+    _remove_lock(library, (item["id"], *item.get("legacy_ids", [])), agent)
     refresh_index(home=home, library=library)
     return result
 

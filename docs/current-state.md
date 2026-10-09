@@ -23,6 +23,24 @@ synthetic fixture unless noted. No user skill files were touched.
 - Live user index on this machine reports **stale** (source files moved
   since last refresh) instead of serving silently outdated results.
 
+## P2 changes (2026-10-10, branch `capfind/plan-implementation`)
+
+- Canonical skill IDs `<source>:skill:<slug>` (e.g.
+  `aes:skill:systematic-debugging-suite`); previous `skill:<hash>` IDs keep
+  resolving via `legacy_ids`. Content edits change `content_hash`, never ID.
+- Records carry `schema_version: 1`, `source_id`, `version`, `tags`,
+  `compatible_agents`, `requirements`, `content_hash`, `trust_status`,
+  `installation_state`, `managed_targets`.
+- `library_catalog.py register-source --id aes --path <suites>`,
+  `unregister-source`, `list-sources`; registry lives in
+  `<library>/sources.json` (user data, never committed).
+- `activate`/`deactivate` maintain `<library>/activations-lock.json`
+  (exact revision + targets); refresh cost grows by one small read per
+  skill for hashing.
+- Live verification: companion Stack registered as `aes`; 18/18 suites
+  resolve with no native installation; pre-existing native copies appear
+  as honestly-labeled `unmanaged` managed-targets / alternate versions.
+
 ## P1 changes (2026-10-10, branch `capfind/plan-implementation`)
 
 - `activate` is now `preview → validate → apply → verify → manifest`.

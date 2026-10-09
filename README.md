@@ -182,6 +182,19 @@ indexes, and interrupted operations. `CAPFIND_HOME`, `CAPFIND_LIBRARY`, and
 `CAPFIND_ARCHIVE` override the default roots (the archive vault defaults to
 `~/ai-agent-library/on-demand`).
 
+### Skill sources and stable IDs
+
+```powershell
+python library_catalog.py register-source --id aes --path C:\path\to\agentic-engineering-stack\suites
+python library_catalog.py list-sources
+python library_catalog.py unregister-source --id aes
+```
+
+Skills carry stable IDs of the form `<source>:skill:<slug>` (for example
+`aes:skill:systematic-debugging-suite`). Older `skill:<hash>` IDs still
+resolve. Activations are recorded with their exact content revision in
+`activations-lock.json`; editing a skill changes its hash, never its ID.
+
 `library_catalog.py` writes `skills_index.json`, `skills_index.md`, and
 `skills_index.tsv` with local paths. It also refreshes
 `capabilities_index.json`. Searches read the index and do not scan folders or

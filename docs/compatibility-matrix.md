@@ -9,9 +9,9 @@
 | `load_skill` (exact-ID content) | **missing** (callers read `source_path`) | required | gap (P4) |
 | `get_tool_schema` | missing | required if tool sources supported | gap (P4) |
 | `prepare_activation` / `deactivate_skill` | missing | required | gap (P4/P5) |
-| Stable IDs `<source>:<kind>:<slug>` | `skill:<hash16>`, no source part | required | gap (P2) |
-| `schema_version`, trust/installation states | missing | required | gap (P2) |
-| Source registration (`aes` namespace) | missing | required | gap (P2) |
+| Stable IDs `<source>:<kind>:<slug>` | implemented for skills (legacy hash IDs still resolve) | required | compatible (P2) |
+| `schema_version`, trust/installation states | implemented (`schema_version: 1`; trust `approved/unscanned/needs_review/blocked`; installation `available/archived/broken`) | required | compatible (P2) |
+| Source registration (`aes` namespace) | implemented (`register-source`; live `aes` registration resolves 18/18 Stack suites with no native install) | required | compatible (P2) |
 | Structured errors (`NOT_FOUND`, `CONFLICT`, ...) | plain `ValueError` strings | required | gap (P4) |
 
 Rule: Stack must use Finder's public MCP/CLI contract; Finder must stay
