@@ -170,8 +170,17 @@ python capability_finder.py search "inspect a CAD file" --json
 python capability_finder.py search "browser automation" --kind tool
 python capability_finder.py search "deploy Cloudflare Workers" --kind skill --agent codex --project-hint "Cloudflare Workers"
 python capability_finder.py show skill:EXACT_ID
+python capability_finder.py activate skill:EXACT_ID --agent codex --dry-run
 python capability_finder.py activate skill:EXACT_ID --agent codex
+python capability_finder.py deactivate skill:EXACT_ID --agent codex
+python capability_finder.py doctor
 ```
+
+`activate --dry-run` prints the plan without changing anything. `deactivate`
+removes only a finder-managed link. `doctor` reports broken links, stale
+indexes, and interrupted operations. `CAPFIND_HOME`, `CAPFIND_LIBRARY`, and
+`CAPFIND_ARCHIVE` override the default roots (the archive vault defaults to
+`~/ai-agent-library/on-demand`).
 
 `library_catalog.py` writes `skills_index.json`, `skills_index.md`, and
 `skills_index.tsv` with local paths. It also refreshes

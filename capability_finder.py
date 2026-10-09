@@ -51,8 +51,9 @@ STOPWORDS = {"a", "an", "the", "for", "with", "to", "of", "in", "on", "my", "i",
 
 
 def _paths(home: Path | None, library: Path | None) -> tuple[Path, Path]:
-    home = Path(home or DEFAULT_HOME).resolve()
-    return home, Path(library or home / "ai-agent-library").resolve()
+    home = Path(home or os.environ.get("CAPFIND_HOME") or DEFAULT_HOME).expanduser().resolve()
+    override = os.environ.get("CAPFIND_LIBRARY")
+    return home, Path(library or override or home / "ai-agent-library").expanduser().resolve()
 
 
 def _read_json(path: Path) -> Any:
@@ -577,7 +578,72 @@ def show(capability_id: str, home: Path | None = None, library: Path | None = No
     return None
 
 
-def activate(capability_id: str, agent: str, home: Path | None = None, library: Path | None = None) -> dict:
+def _activation_manifest_path(library: Path, agent: str, name: str) -> Path:
+    return library / "_activations" / f"{agent}__{name}.json"
+
+
+def _validate_skill_name(name: str) -> str:
+    if not name or name in (".", "..") or "/" in name or "\\" in name or Path(name).name != name:
+        raise ValueError(f"invalid skill folder name: {name!r}")
+    return name
+
+
+def _is_junction(path: Path) -> bool:
+    probe = getattr(path, "is_junction", None)
+    if callable(probe):
+        try:
+            return bool(probe())
+        except OSError:
+            return False
+    try:
+        return path.lstat().st_reparse_tag == 0xA0000003
+    except (OSError, AttributeError):
+        return False
+
+
+def _managed_link_kind(path: Path) -> str:
+    if _is_junction(path):
+        return "junction"
+    if path.is_symlink():
+        return "directory_symlink" if path.is_dir() else "file_symlink"
+    return "directory"
+
+
+def _points_at(link: Path, src: Path) -> bool:
+    try:
+        return link.resolve() == src.resolve()
+    except OSError:
+        return False
+
+
+def _remove_managed_link(path: Path, kind: str) -> None:
+    if kind in ("junction", "directory_symlink"):
+        os.rmdir(path)
+    else:
+        path.unlink()
+
+
+def _write_activation_manifest(path: Path, manifest: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _adopt_activation_manifest(manifest_path: Path, plan: dict) -> None:
+    if manifest_path.is_file():
+        return
+    target = Path(plan["target"])
+    _write_activation_manifest(manifest_path, {
+        "format": 1, "status": "applied", "stage": "adopted",
+        "id": plan["id"], "agent": plan["agent"], "name": plan["name"],
+        "source": plan["source"], "target": plan["target"],
+        "link_kind": _managed_link_kind(target), "created_at_epoch": time.time(),
+    })
+
+
+def preview_activation(capability_id: str, agent: str, home: Path | None = None, library: Path | None = None) -> dict:
+    """Dry-run plan for activate. Makes no filesystem changes."""
     home, library = _paths(home, library)
     item = show(capability_id, home, library)
     if item is None or item["type"] != "skill":
@@ -587,42 +653,183 @@ def activate(capability_id: str, agent: str, home: Path | None = None, library: 
     variants = item["variants"]
     chosen = next((v for v in variants if v["store"] == agent), variants[0])
     src = Path(chosen["path"])
+    name = _validate_skill_name(item["name"])
+    target = home / AGENT_DIRS[agent] / name
+    plan = {"id": capability_id, "agent": agent, "name": name,
+            "source": str(src), "target": str(target),
+            "method": "symlink" if os.name != "nt" else "symlink, junction fallback",
+            "manifest": str(_activation_manifest_path(library, agent, name)),
+            "status": "ready", "conflict": None}
     if not (src / "SKILL.md").is_file():
-        raise FileNotFoundError(f"skill source unavailable: {src}")
-    name = item["name"]
-    if not name or name in (".", "..") or "/" in name or "\\" in name or Path(name).name != name:
-        raise ValueError(f"invalid skill folder name: {name!r}")
-    target_root = home / AGENT_DIRS[agent]
-    target_root.mkdir(parents=True, exist_ok=True)
-    target = target_root / name
-    if target.exists() or target.is_symlink():
-        if target.resolve() == src.resolve():
-            return {"status": "already_active", "id": capability_id, "agent": agent, "path": str(target)}
-        raise FileExistsError(f"refusing to overwrite existing skill: {target}")
-    try:
-        os.symlink(src, target, target_is_directory=True)
-    except FileExistsError:
-        if target.resolve() == src.resolve():
-            return {"status": "already_active", "id": capability_id, "agent": agent, "path": str(target)}
-        raise FileExistsError(f"refusing to overwrite existing skill: {target}")
-    except OSError:
-        if os.name == "nt":
-            command = ("$data = [Console]::In.ReadToEnd() | ConvertFrom-Json; "
-                       "Set-Location -LiteralPath $data.parent; "
-                       "New-Item -ItemType Junction -Path . -Name $data.name "
-                       "-Target $data.source -ErrorAction Stop | Out-Null")
-            result = subprocess.run(
-                ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
-                input=json.dumps({"parent": str(target_root), "name": name, "source": str(src)}),
-                capture_output=True, text=True, encoding="utf-8", errors="replace")
-            if result.returncode != 0 or not target.is_dir() or target.resolve() != src.resolve():
-                raise OSError(result.stderr.strip() or "junction creation failed")
+        plan["status"] = "conflict"
+        plan["conflict"] = f"skill source unavailable: {src}"
+    elif os.path.lexists(target):
+        if _points_at(target, src):
+            plan["status"] = "already_active"
         else:
-            raise
+            plan["status"] = "conflict"
+            plan["conflict"] = f"refusing to overwrite existing skill: {target}"
+    return plan
+
+
+def _junction_fallback(target_root: Path, name: str, src: Path, target: Path) -> None:
+    command = ("$data = [Console]::In.ReadToEnd() | ConvertFrom-Json; "
+               "Set-Location -LiteralPath $data.parent; "
+               "New-Item -ItemType Junction -Path . -Name $data.name "
+               "-Target $data.source -ErrorAction Stop | Out-Null")
+    result = subprocess.run(
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
+        input=json.dumps({"parent": str(target_root), "name": name, "source": str(src)}),
+        capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if result.returncode != 0 or not target.is_dir() or not _points_at(target, src):
+        raise OSError(result.stderr.strip() or "junction creation failed")
+
+
+def activate(capability_id: str, agent: str, home: Path | None = None, library: Path | None = None) -> dict:
+    home, library = _paths(home, library)
+    plan = preview_activation(capability_id, agent, home, library)
+    manifest_path = Path(plan["manifest"])
+    if plan["status"] == "conflict":
+        if os.path.lexists(plan["target"]):
+            raise FileExistsError(plan["conflict"])
+        raise FileNotFoundError(plan["conflict"])
+    if plan["status"] == "already_active":
+        _adopt_activation_manifest(manifest_path, plan)
+        return {"status": "already_active", "id": capability_id, "agent": agent, "path": plan["target"]}
+    src, target = Path(plan["source"]), Path(plan["target"])
+    target.parent.mkdir(parents=True, exist_ok=True)
+    manifest = {"format": 1, "status": "applying", "stage": "link",
+                "id": capability_id, "agent": agent, "name": plan["name"],
+                "source": plan["source"], "target": plan["target"],
+                "link_kind": None, "created_at_epoch": time.time()}
+    created = False
+    try:
+        try:
+            os.symlink(src, target, target_is_directory=True)
+            created = True
+        except FileExistsError:
+            if _points_at(target, src):
+                _adopt_activation_manifest(manifest_path, plan)
+                return {"status": "already_active", "id": capability_id, "agent": agent, "path": plan["target"]}
+            raise FileExistsError(f"refusing to overwrite existing skill: {target}")
+        except OSError:
+            if os.name == "nt":
+                _junction_fallback(target.parent, plan["name"], src, target)
+                created = True
+            else:
+                raise
+        if created and not _points_at(target, src):
+            raise OSError(f"activation verify failed: {target}")
+        manifest["status"] = "applied"
+        manifest["stage"] = "verified"
+        manifest["link_kind"] = _managed_link_kind(target)
+        _write_activation_manifest(manifest_path, manifest)
+    except Exception as exc:
+        manifest["status"] = "failed"
+        manifest["error"] = str(exc)
+        manifest["rolled_back"] = False
+        if created and os.path.lexists(target) and _points_at(target, src):
+            try:
+                _remove_managed_link(target, _managed_link_kind(target))
+                manifest["rolled_back"] = True
+            except OSError as rollback_exc:
+                manifest["rollback_error"] = str(rollback_exc)
+        _write_activation_manifest(manifest_path, manifest)
+        raise
     refresh_index(home=home, library=library)
-    return {"status": "activated", "id": capability_id, "agent": agent, "path": str(target)}
+    return {"status": "activated", "id": capability_id, "agent": agent, "path": plan["target"]}
 
 
+def deactivate_skill(capability_id: str, agent: str, home: Path | None = None, library: Path | None = None) -> dict:
+    """Remove only a managed activation link. Never touches the source or real directories."""
+    home, library = _paths(home, library)
+    item = show(capability_id, home, library)
+    if item is None or item["type"] != "skill":
+        raise ValueError("deactivate requires an exact skill ID from search")
+    if agent not in AGENT_DIRS:
+        raise ValueError(f"unknown agent: {agent}")
+    name = _validate_skill_name(item["name"])
+    manifest_path = _activation_manifest_path(library, agent, name)
+    manifest = _read_json(manifest_path)
+    target = home / AGENT_DIRS[agent] / name
+    result = {"status": "deactivated", "id": capability_id, "agent": agent, "path": str(target)}
+    if not os.path.lexists(target):
+        if isinstance(manifest, dict):
+            manifest_path.unlink(missing_ok=True)
+        result["status"] = "already_removed"
+        return result
+    if not isinstance(manifest, dict) or manifest.get("status") not in ("applied", "failed"):
+        raise FileExistsError(f"refusing to remove unmanaged skill: {target}")
+    kind = _managed_link_kind(target)
+    if kind == "directory":
+        raise FileExistsError(f"refusing to remove unmanaged directory: {target}")
+    recorded = manifest.get("source")
+    if recorded and _points_at(target, Path(recorded)):
+        _remove_managed_link(target, kind)
+    elif manifest.get("status") == "failed":
+        _remove_managed_link(target, kind)
+    else:
+        raise FileExistsError(f"activation drift: {target} no longer points at the recorded source")
+    manifest_path.unlink(missing_ok=True)
+    refresh_index(home=home, library=library)
+    return result
+
+
+def doctor(home: Path | None = None, library: Path | None = None) -> list[dict]:
+    """Inspect index health, skill links, and activation/archive manifests."""
+    home, library = _paths(home, library)
+    path = library / "capabilities_index.json"
+    try:
+        payload = _load(home, library)
+    except FileNotFoundError:
+        return [{"level": "error", "code": "INDEX_MISSING",
+                 "detail": f"capability index missing: {path}; run: library_catalog.py"}]
+    except ValueError as exc:
+        return [{"level": "error", "code": "INDEX_STALE_OR_UNREADABLE", "detail": str(exc)}]
+    findings: list[dict] = []
+    for item in payload.get("capabilities", []):
+        if item.get("type") != "skill":
+            continue
+        for variant in item.get("variants", []):
+            md = variant.get("skill_md", "")
+            if md and not Path(md).is_file():
+                findings.append({"level": "warning", "code": "BROKEN_VARIANT",
+                                 "detail": f"{item.get('id')} {item.get('name')} variant missing: {md}"})
+    actdir = library / "_activations"
+    if actdir.is_dir():
+        for entry in sorted(actdir.glob("*.json")):
+            data = _read_json(entry)
+            if not isinstance(data, dict):
+                findings.append({"level": "warning", "code": "CORRUPT_MANIFEST",
+                                 "detail": f"unreadable activation manifest: {entry}"})
+                continue
+            target = Path(data.get("target", ""))
+            if data.get("status") == "failed":
+                findings.append({"level": "error", "code": "INTERRUPTED_ACTIVATION",
+                                 "detail": f"{data.get('id')} for {data.get('agent')}: {data.get('error')}; rolled_back={data.get('rolled_back')}; manifest: {entry}"})
+            elif data.get("status") == "applied":
+                recorded = data.get("source", "")
+                if not os.path.lexists(target) or (recorded and not _points_at(target, Path(recorded))):
+                    findings.append({"level": "warning", "code": "ACTIVATION_DRIFT",
+                                     "detail": f"{data.get('id')} for {data.get('agent')}: target missing or moved: {target}"})
+    archive = library / "on-demand"
+    if archive.is_dir():
+        for entry in sorted(archive.glob("*manifest.json")):
+            data = _read_json(entry)
+            if not isinstance(data, dict):
+                findings.append({"level": "warning", "code": "CORRUPT_MANIFEST",
+                                 "detail": f"unreadable archive manifest: {entry}"})
+                continue
+            if data.get("status") in ("applying", "archiving", "restoring", "partial_archive", "partial_restore"):
+                findings.append({"level": "error", "code": "INTERRUPTED_ARCHIVE",
+                                 "detail": f"archive manifest not cleanly finished ({data.get('status')}): {entry}"})
+            for item_entry in data.get("entries", []):
+                archived = item_entry.get("archive_path", "")
+                live = [p.get("resolved_path", "") for p in item_entry.get("store_paths", []) if isinstance(p, dict)]
+                if archived and not Path(archived).exists() and not any(d and Path(d).is_dir() for d in live):
+                    findings.append({"level": "error", "code": "ARCHIVE_LOST",
+                                     "detail": f"{item_entry.get('name')}: neither archive nor source exists (manifest: {entry})"})
+    return findings
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Find installed skills, MCP tools, and plugins locally")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -640,6 +847,12 @@ def main(argv: list[str] | None = None) -> int:
     action = sub.add_parser("activate")
     action.add_argument("id")
     action.add_argument("--agent", required=True, choices=sorted(AGENT_DIRS))
+    action.add_argument("--dry-run", action="store_true", help="print the plan without changing anything")
+    deact = sub.add_parser("deactivate")
+    deact.add_argument("id")
+    deact.add_argument("--agent", required=True, choices=sorted(AGENT_DIRS))
+    doc = sub.add_parser("doctor")
+    doc.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
     try:
         if args.command == "refresh":
@@ -657,8 +870,22 @@ def main(argv: list[str] | None = None) -> int:
             if item is None:
                 raise ValueError("capability ID not found")
             print(json.dumps(item, ensure_ascii=False, indent=2))
+        elif args.command == "activate":
+            if args.dry_run:
+                print(json.dumps(preview_activation(args.id, args.agent), ensure_ascii=False, indent=2))
+            else:
+                print(json.dumps(activate(args.id, args.agent), ensure_ascii=False))
+        elif args.command == "deactivate":
+            print(json.dumps(deactivate_skill(args.id, args.agent), ensure_ascii=False))
         else:
-            print(json.dumps(activate(args.id, args.agent), ensure_ascii=False))
+            findings = doctor()
+            if args.json:
+                print(json.dumps(findings, ensure_ascii=False, indent=2))
+            else:
+                for finding in findings:
+                    print(f"{finding['level']}: {finding['code']}: {finding['detail']}")
+                if not findings:
+                    print("doctor: no problems found")
         return 0
     except (OSError, ValueError) as exc:
         print(str(exc), file=sys.stderr)

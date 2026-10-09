@@ -28,8 +28,8 @@ import time
 from collections import defaultdict
 from datetime import datetime, timezone
 
-HOME = os.path.expanduser("~")
-LIBRARY = os.path.join(HOME, "ai-agent-library")
+HOME = os.environ.get("CAPFIND_HOME", os.path.expanduser("~"))
+LIBRARY = os.environ.get("CAPFIND_LIBRARY", os.path.join(HOME, "ai-agent-library"))
 
 # Root name -> absolute path. Priority order decides which copy wins when the
 # same skill is reachable from several stores: the first root that contains a

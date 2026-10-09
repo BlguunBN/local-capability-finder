@@ -23,6 +23,23 @@ synthetic fixture unless noted. No user skill files were touched.
 - Live user index on this machine reports **stale** (source files moved
   since last refresh) instead of serving silently outdated results.
 
+## P1 changes (2026-10-10, branch `capfind/plan-implementation`)
+
+- `activate` is now `preview → validate → apply → verify → manifest`.
+  `--dry-run` prints the plan with zero filesystem changes. Failures write
+  a `failed` recovery manifest (with rollback attempt) instead of vanishing.
+- `deactivate <id> --agent <name>` removes only a manifest-managed link;
+  real directories and unmanaged paths are refused, never deleted.
+- `doctor [--json]` reports broken variants, interrupted activations or
+  archives, drift, lost archives, and stale/unreadable indexes.
+- Archive vault default moved from the repo checkout to
+  `~/ai-agent-library/on-demand`, shared with search. `CAPFIND_ARCHIVE`
+  overrides it; manifests record their own root so legacy vaults still
+  restore via `--manifest <path>`.
+- `skill_archive.py` no longer requires the missing specialist CSV;
+  archive candidates come from `skills_index.json` plus a live root scan.
+- Shared path config: `CAPFIND_HOME`, `CAPFIND_LIBRARY`, `CAPFIND_ARCHIVE`.
+
 ## Known safety risks (drive P1)
 
 1. `skill_archive.py` anchors its vault at the **repo checkout**
