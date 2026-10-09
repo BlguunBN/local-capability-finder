@@ -27,5 +27,7 @@
 !organize_skills.py
 !install_agents.py
 !mcp_servers.example.yaml
+!docs/
+!docs/*.md
 !tests/
 !tests/*.py

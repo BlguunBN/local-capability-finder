@@ -138,7 +138,8 @@ def collect() -> tuple[list[dict], dict[str, int]]:
                 continue
 
             try:
-                text = open(skill_md, encoding="utf-8", errors="replace").read()
+                with open(skill_md, encoding="utf-8", errors="replace") as handle:
+                    text = handle.read()
             except OSError as exc:
                 print(f"  ! unreadable: {skill_md} ({exc})", file=sys.stderr)
                 continue
