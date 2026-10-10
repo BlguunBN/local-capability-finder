@@ -32,4 +32,4 @@ Contract failures use stable `data.code` values, including `NOT_FOUND`, `AMBIGUO
 
 ## Compatible Stack
 
-Stack 0.1.x Contract v1 adapter uses Finder 0.2.x. Its stdio integration registers all 18 Stack IDs, searches and loads one exact suite, keeps personal capabilities discoverable, and tests approved activation/deactivation in a disposable home. Release CI must pin both project revisions; do not depend on floating `main` branches.
+Stack 0.1.x Contract v1 adapter uses Finder 0.2.x. Its stdio integration registers all 18 Stack IDs, searches and loads one exact suite, keeps personal capabilities discoverable, and tests approved activation/deactivation in a disposable home. Hosted paired CI passed on Stack revision `6bff1d582c037f86bce365ae8a5011266eac20b2` with Finder pinned to `fcb6ce9e9f977eb553ad7b8f23d9fa6db375bb76`: https://github.com/BlguunBN/agentic-engineering-stack/actions/runs/38028044978. These review snapshots do not constitute a published release; do not depend on floating `main` branches.

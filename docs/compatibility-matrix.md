@@ -15,7 +15,4 @@ Stack calls only Finder's documented MCP tools and source-registration CLI. It
 does not import Finder Python modules or write Finder indexes, trust state,
 locks, or activation manifests.
 
-Local pairing tested: Finder 0.2.x Contract v1 on
-`capfind/plan-implementation` with current Stack revision. Release workflows
-must pin the Finder version/commit and Stack revision together; do not float on
-`main`.
+The hosted review pairing pins Finder `fcb6ce9e9f977eb553ad7b8f23d9fa6db375bb76` and Stack revision `6bff1d582c037f86bce365ae8a5011266eac20b2`. The paired Windows/Ubuntu Python 3.11/3.12 run passed: https://github.com/BlguunBN/agentic-engineering-stack/actions/runs/38028044978. This is review-snapshot evidence, not a published compatibility release; keep pins immutable and do not float on `main`.
