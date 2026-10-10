@@ -565,9 +565,12 @@ def _plugin_entries(home: Path) -> list[dict]:
 
 def refresh_index(probe_tools: bool = False, home: Path | None = None, library: Path | None = None) -> dict:
     home, library = _paths(home, library)
+    started = time.perf_counter()
     items = _skill_entries(home, library) + _tool_entries(home, library, probe_tools) + _plugin_entries(home)
+    elapsed = time.perf_counter() - started
     items.sort(key=lambda x: (x["type"], x["name"].casefold(), x["id"]))
     payload = {"schema": 1, "indexed_at_epoch": time.time(),
+               "indexed_in_seconds": round(elapsed, 3),
                "active_skill_stores": [agent for agent, folder in AGENT_DIRS.items()
                                        if (home / folder).is_dir()], "watched_paths": [
         {"path": str(path), "mtime_ns": _mtime(path)} for path in _watch_paths(home, library, items)
@@ -841,7 +844,7 @@ def _activation_manifest_path(library: Path, agent: str, name: str) -> Path:
 
 def _validate_skill_name(name: str) -> str:
     if not name or name in (".", "..") or "/" in name or "\\" in name or Path(name).name != name:
-        raise ValueError(f"invalid skill folder name: {name!r}")
+        raise CapError("INVALID_PATH", f"invalid skill folder name: {name!r}")
     return name
 
 
@@ -1327,6 +1330,7 @@ def collect_metrics(home: Path | None = None, library: Path | None = None) -> di
         "by_type": by_type,
         "index_bytes": index_path.stat().st_size if index_path.is_file() else None,
         "skills_catalog_bytes": catalog_path.stat().st_size if catalog_path.is_file() else None,
+        "last_indexed_in_seconds": payload.get("indexed_in_seconds"),
     }
     latencies = []
     max_bytes = 0

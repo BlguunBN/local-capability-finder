@@ -249,6 +249,18 @@ class ArchiveSafetyTests(unittest.TestCase):
             self.assertTrue((live / "SKILL.md").is_file())
             self.assertEqual(self.hashes[name], skill_archive.tree_hash(live))
 
+    def test_restore_refuses_when_source_reoccupied(self):
+        manifest = skill_archive.build_manifest(["alpha-skill"], self.library)
+        skill_archive.write_manifest(manifest)
+        skill_archive.apply_archive(manifest)
+        live = self.home / ".agents" / "skills" / "alpha-skill"
+        live.mkdir(parents=True)
+        (live / "SKILL.md").write_text("different content", encoding="utf-8")
+        with self.assertRaises(RuntimeError):
+            skill_archive.restore_archive(manifest)
+        archived = self.vault / "skills" / "test-manifest" / "alpha-skill"
+        self.assertEqual(self.hashes["alpha-skill"], skill_archive.tree_hash(archived))
+
     def test_unknown_skill_is_rejected(self):
         with self.assertRaises(RuntimeError):
             skill_archive.build_manifest(["no-such-skill"], self.library)
