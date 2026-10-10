@@ -60,6 +60,10 @@ def _backup(path: Path) -> Path | None:
         return None
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     backup = path.with_name(f"{path.name}.bak-capfind-{stamp}")
+    suffix = 1
+    while backup.exists():
+        backup = path.with_name(f"{path.name}.bak-capfind-{stamp}-{suffix}")
+        suffix += 1
     shutil.copy2(path, backup)
     return backup
 

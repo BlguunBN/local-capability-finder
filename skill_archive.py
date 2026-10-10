@@ -97,6 +97,11 @@ def normalized_path(path: Path) -> str:
 
 
 def same_path(left: Path, right: Path) -> bool:
+    try:
+        if left.exists() and right.exists():
+            return left.samefile(right)
+    except OSError:
+        pass
     return normalized_path(left.resolve(strict=False)) == normalized_path(right.resolve(strict=False))
 
 
@@ -351,9 +356,13 @@ def apply_archive(manifest: dict) -> None:
             if not inside(original, USER_ROOT) or not inside(resolved, USER_ROOT):
                 raise RuntimeError(f"unsafe restore path: {original}")
             canonical = Path(entry["store_paths"][0]["resolved_path"])
-            if original != canonical and (not is_link(original) or original.resolve(strict=True) != canonical):
-                raise RuntimeError(f"expected junction alias changed; stopped before changes: {original}")
-            if original != canonical and p["link_kind"] not in ("junction", "directory_symlink"):
+            alias_kind = p["link_kind"]
+            if alias_kind in ("junction", "directory_symlink"):
+                if not is_link(original) or not same_path(original, canonical):
+                    raise RuntimeError(f"expected junction alias changed; stopped before changes: {original}")
+            elif not same_path(original, canonical):
+                raise RuntimeError(f"expected canonical skill path changed; stopped before changes: {original}")
+            if alias_kind not in ("directory", "junction", "directory_symlink"):
                 raise RuntimeError(f"unsupported directory alias kind: {original}")
     manifest["status"] = "archiving"
     for entry in manifest["entries"]:

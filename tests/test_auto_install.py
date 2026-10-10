@@ -33,6 +33,26 @@ class AutoInstallTests(unittest.TestCase):
         self.assertEqual(path.read_bytes(), original)
         self.assertGreaterEqual(len(list(path.parent.glob("AGENTS.md.bak-capfind-*"))), 2)
 
+    def test_backup_names_remain_unique_when_clock_timestamp_repeats(self):
+        path = self.home / "AGENTS.md"
+        path.write_text("preserve", encoding="utf-8")
+
+        class FixedDateTime:
+            @staticmethod
+            def now():
+                class FixedStamp:
+                    @staticmethod
+                    def strftime(_format):
+                        return "20260101-000000-000000"
+                return FixedStamp()
+
+        with patch.object(auto_install, "datetime", FixedDateTime):
+            first = auto_install._backup(path)
+            second = auto_install._backup(path)
+        self.assertNotEqual(first, second)
+        self.assertEqual(first.read_text(encoding="utf-8"), "preserve")
+        self.assertEqual(second.read_text(encoding="utf-8"), "preserve")
+
     def test_hook_preserves_other_hooks_and_removes_only_ours(self):
         path = auto_install._hook_path("claude", self.home)
         path.parent.mkdir(parents=True)
