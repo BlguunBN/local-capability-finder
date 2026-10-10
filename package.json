@@ -1,6 +1,6 @@
 {
   "name": "local-capability-finder-cli",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Local CLI and MCP setup for finding installed agent capabilities",
   "homepage": "https://github.com/BlguunBN/local-capability-finder#readme",
   "repository": {
@@ -24,6 +24,9 @@
     "bin/capfind.js",
     "capability_finder.py",
     "capability_mcp.py",
+    "auto_skill_router.py",
+    "auto_install.py",
+    "auto_hook.py",
     "install_agents.py",
     "library_catalog.py",
     "skill_archive.py",

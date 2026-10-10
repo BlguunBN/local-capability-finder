@@ -9,7 +9,8 @@ const readline = require('node:readline');
 const { version } = require('../package.json');
 
 const source = path.resolve(__dirname, '..');
-const scripts = ['capability_finder.py', 'capability_mcp.py', 'install_agents.py', 'library_catalog.py'];
+const scripts = ['capability_finder.py', 'capability_mcp.py', 'install_agents.py', 'library_catalog.py',
+  'auto_install.py', 'auto_hook.py', 'auto_skill_router.py'];
 const agentNames = ['codex', 'claude', 'gemini', 'antigravity', 'hermes', 'cursor', 'opencode', 'omp'];
 const agents = new Set(agentNames);
 
@@ -24,6 +25,10 @@ Usage:
   capfind refresh [--probe-tools]
   capfind add [--agent <name>] [--all] [--dry-run] [--skip-refresh]
   capfind setup [same options as add]
+  capfind auto enable [--agent <name>|--all] [--mode explicit|smart] [--hook] [--dry-run]
+  capfind auto status [--agent <name>|--all]
+  capfind auto disable [--agent <name>|--all] [--dry-run]
+  capfind auto test "task prompt" [--mode explicit|smart] [--json]
   capfind mcp
 
 add opens an interactive agent picker in a terminal. Use --agent for scripts.
@@ -173,6 +178,59 @@ async function main(argv) {
     return;
   }
   const py = python();
+  if (command === 'auto') {
+    const action = argv.shift();
+    if (!['enable', 'status', 'disable', 'test'].includes(action)) {
+      throw new Error('auto requires enable, status, disable, or test');
+    }
+    const selected = [];
+    let all = false;
+    let mode = 'explicit';
+    let hook = false;
+    let dryRun = false;
+    let json = false;
+    let prompt;
+    if (action === 'test') {
+      prompt = argv.shift();
+      if (!prompt || prompt.startsWith('-')) throw new Error('auto test requires a quoted prompt');
+    }
+    while (argv.length) {
+      const flag = argv.shift();
+      if (flag === '--agent') {
+        const name = argv.shift();
+        if (!name || !agents.has(name)) throw new Error('--agent requires a supported agent name');
+        selected.push(name);
+      } else if (flag === '--all') all = true;
+      else if (flag === '--mode') {
+        mode = argv.shift();
+        if (!['explicit', 'smart'].includes(mode)) throw new Error('--mode requires explicit or smart');
+      } else if (flag === '--hook') hook = true;
+      else if (flag === '--dry-run') dryRun = true;
+      else if (flag === '--json') json = true;
+      else throw new Error(`unknown auto option: ${flag}`);
+    }
+    if (all && selected.length) throw new Error('use --all or --agent, not both');
+    if (action === 'test' && (all || selected.length || hook || dryRun)) {
+      throw new Error('auto test accepts only --mode and --json');
+    }
+    if (action !== 'test' && json) throw new Error('--json is only valid with auto test');
+    if (action !== 'enable' && hook) throw new Error('--hook is only valid with auto enable');
+    if (action === 'status' && dryRun) throw new Error('--dry-run is not needed for auto status');
+    if (action === 'enable' && !all && !selected.length) selected.push(...await chooseAgents());
+    if (all) selected.push(...agentNames);
+    const root = action === 'enable' ? setupRoot(dryRun)
+      : fs.existsSync(path.join(source, '.git')) ? source
+        : fs.existsSync(path.join(stableRoot(), 'auto_install.py')) ? stableRoot() : source;
+    const scriptRoot = dryRun && root !== source ? source : root;
+    const args = [action, ...(prompt ? [prompt] : []),
+      ...(selected.length ? ['--agents', ...new Set(selected)] : []),
+      '--mode', mode,
+      ...(hook ? ['--hooks'] : []),
+      ...(dryRun ? ['--dry-run'] : []),
+      ...(json ? ['--json'] : [])];
+    run(py, { root: scriptRoot, name: 'auto_install.py' }, args);
+    return;
+  }
   if (command === 'setup' || command === 'add') {
     const selected = [];
     let all = false;

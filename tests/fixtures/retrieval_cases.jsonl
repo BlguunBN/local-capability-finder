@@ -1,0 +1,105 @@
+{"expected": "docker-containers", "kind": "skill", "mode": "top1", "query": "build docker container images"}
+{"expected": "kubernetes-deploy", "kind": "skill", "mode": "top1", "query": "deploy workloads to kubernetes"}
+{"expected": "terraform-aws", "kind": "skill", "mode": "top1", "query": "provision AWS infrastructure modules"}
+{"expected": "pdf-editor", "kind": "skill", "mode": "top1", "query": "edit pdf pages"}
+{"expected": "dashboard-design", "kind": "skill", "mode": "top1", "query": "analytics dashboard charts"}
+{"expected": "dicom-preflight", "kind": "skill", "mode": "top1", "query": "validate dicom series"}
+{"expected": "dicom-anonymize", "kind": "skill", "mode": "top1", "query": "anonymize dicom metadata"}
+{"expected": "cad-viewer", "kind": "skill", "mode": "top1", "query": "inspect step cad files"}
+{"expected": "csv-cleaner", "kind": "skill", "mode": "top1", "query": "normalize messy csv data"}
+{"expected": "unit-tester", "kind": "skill", "mode": "top1", "query": "table driven pytest tests"}
+{"expected": "code-reviewer", "kind": "skill", "mode": "top1", "query": "review pull requests"}
+{"expected": "git-workflow", "kind": "skill", "mode": "top1", "query": "open git pull request"}
+{"expected": "api-designer", "kind": "skill", "mode": "top1", "query": "rest openapi schemas"}
+{"expected": "postgres-tuning", "kind": "skill", "mode": "top1", "query": "postgres explain indexes"}
+{"expected": "redis-cache", "kind": "skill", "mode": "top1", "query": "redis ttl cache"}
+{"expected": "ci-pipeline", "kind": "skill", "mode": "top1", "query": "github actions pipeline"}
+{"expected": "oauth-login", "kind": "skill", "mode": "top1", "query": "oauth jwt login"}
+{"expected": "stripe-billing", "kind": "skill", "mode": "top1", "query": "stripe subscription webhooks"}
+{"expected": "email-sender", "kind": "skill", "mode": "top1", "query": "transactional email retries"}
+{"expected": "pdf-ocr", "kind": "skill", "mode": "top1", "query": "ocr scanned pdf"}
+{"expected": "image-resize", "kind": "skill", "mode": "top1", "query": "compress images web"}
+{"expected": "cuda-quantum", "kind": "skill", "mode": "top1", "query": "cuda quantum programs"}
+{"expected": "finops-aws", "kind": "skill", "mode": "top1", "query": "aws spend idle"}
+{"expected": "pentest-web", "kind": "skill", "mode": "top1", "query": "owasp injection testing"}
+{"expected": "bio-sequence", "kind": "skill", "mode": "top1", "query": "align dna sequences"}
+{"expected": "iac-terraform-cloud", "kind": "skill", "mode": "top1", "query": "terraform cloud workspaces"}
+{"expected": "web-fetch", "kind": "skill", "mode": "top1", "query": "fetch url markdown"}
+{"expected": "web-scraper", "kind": "skill", "mode": "top1", "query": "scrape listings dataset"}
+{"expected": "markdown-notes", "kind": "skill", "mode": "top1", "query": "markdown wiki notes"}
+{"expected": "json-schema", "kind": "skill", "mode": "top1", "query": "validate json payloads"}
+{"expected": "s3-backup", "kind": "skill", "mode": "top1", "query": "s3 object backups"}
+{"expected": "nginx-proxy", "kind": "skill", "mode": "top1", "query": "nginx reverse proxy"}
+{"expected": "react-forms", "kind": "skill", "mode": "top1", "query": "react forms validation"}
+{"expected": "cron-scheduler", "kind": "skill", "mode": "top1", "query": "cron schedules retries"}
+{"expected": "log-search", "kind": "skill", "mode": "top1", "query": "loki log queries"}
+{"expected": "feature-flags", "kind": "skill", "mode": "top1", "query": "feature flags rollout"}
+{"expected": "websocket-chat", "kind": "skill", "mode": "top1", "query": "websocket chat rooms"}
+{"expected": "graphql-gateway", "kind": "skill", "mode": "top1", "query": "federate graphql subgraphs"}
+{"expected": "license-audit", "kind": "skill", "mode": "top1", "query": "dependency licenses audit"}
+{"expected": "secret-scan", "kind": "skill", "mode": "top1", "query": "leaked secrets scan"}
+{"expected": "load-test", "kind": "skill", "mode": "top1", "query": "k6 load testing"}
+{"expected": "yaml-lint", "kind": "skill", "mode": "top1", "query": "lint yaml"}
+{"expected": "accessibility-audit", "kind": "skill", "mode": "top1", "query": "wcag keyboard contrast"}
+{"expected": "seo-meta", "kind": "skill", "mode": "top1", "query": "seo meta titles"}
+{"expected": "changelog-writer", "kind": "skill", "mode": "top1", "query": "changelog from commits"}
+{"expected": "onboarding-emails", "kind": "skill", "mode": "top1", "query": "onboarding drip emails"}
+{"expected": "incident-runbook", "kind": "skill", "mode": "top1", "query": "on-call runbooks"}
+{"expected": "postmortem-notes", "kind": "skill", "mode": "top1", "query": "blameless postmortems"}
+{"expected": "threat-model", "kind": "skill", "mode": "top1", "query": "stride threat modeling"}
+{"expected": "javascript-bundler", "kind": "skill", "mode": "top1", "query": "bundle javascript tree shaking"}
+{"expected": "typescript-strict", "kind": "skill", "mode": "top1", "query": "strict typescript types"}
+{"expected": "python-dataframes", "kind": "skill", "mode": "top1", "query": "python tabular dataframes"}
+{"expected": "database-migrate", "kind": "skill", "mode": "top1", "query": "relational schema migrations"}
+{"expected": "app-profiler", "kind": "skill", "mode": "top1", "query": "application performance bottlenecks"}
+{"expected": "docs-writer", "kind": "skill", "mode": "top1", "query": "documentation guides references"}
+{"expected": "app-config", "kind": "skill", "mode": "top1", "query": "environment variables secrets"}
+{"expected": "unit-tester", "kind": "skill", "mode": "top1", "query": "unit test mocks"}
+{"expected": "postgres-tuning", "kind": "skill", "mode": "top1", "query": "postgres slow queries"}
+{"expected": "oauth-login", "kind": "skill", "mode": "top1", "query": "oauth refresh tokens"}
+{"expected": "dicom-preflight", "kind": "skill", "mode": "top1", "query": "dicom import validation"}
+{"expected": "docker-containers", "kind": "skill", "mode": "top3", "query": "ship containers production"}
+{"expected": "kubernetes-deploy", "kind": "skill", "mode": "top3", "query": "k8s manifests helm"}
+{"expected": "terraform-aws", "kind": "skill", "mode": "top3", "query": "hcl aws provisioning"}
+{"expected": "pdf-editor", "kind": "skill", "mode": "top3", "query": "pdf merge pages"}
+{"expected": "unit-tester", "kind": "skill", "mode": "top3", "query": "pytest unit coverage"}
+{"expected": "code-reviewer", "kind": "skill", "mode": "top3", "query": "pr review comments"}
+{"expected": "git-workflow", "kind": "skill", "mode": "top1", "query": "git commit flow"}
+{"expected": "javascript-bundler", "kind": "skill", "mode": "top3", "query": "js bundle splitting"}
+{"expected": "typescript-strict", "kind": "skill", "mode": "top3", "query": "ts type safety"}
+{"expected": "python-dataframes", "kind": "skill", "mode": "top3", "query": "py pandas frames"}
+{"expected": "database-migrate", "kind": "skill", "mode": "top3", "query": "db migration versions"}
+{"expected": "oauth-login", "kind": "skill", "mode": "top1", "query": "oauth jwt sessions"}
+{"expected": "iac-terraform-cloud", "kind": "skill", "mode": "top3", "query": "tf workspace runs"}
+{"expected": "ci-pipeline", "kind": "skill", "mode": "top3", "query": "cicd yaml checks"}
+{"expected": "ci-pipeline", "kind": "skill", "mode": "top3", "query": "gh actions pipelines"}
+{"expected": "app-config", "kind": "skill", "mode": "top3", "query": "config environments setup"}
+{"expected": "app-config", "kind": "skill", "mode": "top1", "query": "env variables rotation"}
+{"expected": "playwright", "kind": "tool", "mode": "top1", "query": "browser automation playwright"}
+{"expected": "github-sync", "kind": "tool", "mode": "top1", "query": "sync code github"}
+{"expected": "docker-containers", "kind": "skill", "mode": "top1", "query": "docker-containers"}
+{"expected": "websocket-chat", "kind": "skill", "mode": "top1", "query": "websocket-chat"}
+{"expected": "threat-model", "kind": "skill", "mode": "top1", "query": "threat-model"}
+{"expected": "dicom-preflight", "kind": "skill", "mode": "top1", "query": "dicom series validation"}
+{"expected": "terraform-aws", "kind": "skill", "mode": "top1", "query": "terraform modules aws"}
+{"expected": "web-scraper", "kind": "skill", "mode": "top1", "query": "scrape paginated listings"}
+{"expected": "iac-terraform-cloud", "kind": "skill", "mode": "top1", "query": "cloud workspace runs"}
+{"expected": "docker-containers", "kind": "skill", "mode": "top3", "query": "container registry push"}
+{"expected": "kubernetes-deploy", "kind": "skill", "mode": "top3", "query": "k8s pods logs"}
+{"expected": "changelog-writer", "kind": "skill", "mode": "top1", "query": "changelog commit history"}
+{"expected": "api-designer", "kind": "skill", "mode": "top3", "query": "api rate limiting"}
+{"expected": "websocket-chat", "kind": "skill", "mode": "top3", "query": "websocket reconnect backoff"}
+{"expected": "graphql-gateway", "kind": "skill", "mode": "top3", "query": "graphql pagination cursors"}
+{"expected": "s3-backup", "kind": "skill", "mode": "top3", "query": "s3 lifecycle policies"}
+{"expected": "redis-cache", "kind": "skill", "mode": "top3", "query": "redis eviction policies"}
+{"expected": "stripe-billing", "kind": "skill", "mode": "top3", "query": "stripe invoicing"}
+{"expected": "incident-runbook", "kind": "skill", "mode": "top3", "query": "incident severity paging"}
+{"expected": null, "kind": null, "mode": "none", "query": "origami folding instructions"}
+{"expected": null, "kind": null, "mode": "none", "query": "qzxqzxunmatched"}
+{"expected": null, "kind": null, "mode": "none", "query": "underwater basket weaving certification"}
+{"expected": null, "kind": null, "mode": "none", "query": "flibbertigibbet cromulent synergies"}
+{"expected": null, "kind": null, "mode": "none", "query": "teleportation device calibration"}
+{"expected": null, "kind": null, "mode": "none", "query": "mars colony gardening tips"}
+{"expected": null, "kind": null, "mode": "none", "query": "zzzqqq no such thing"}
+{"expected": null, "kind": null, "mode": "none", "query": "atlantis real estate listings"}
+{"expected": null, "kind": null, "mode": "none", "query": "dark mode css variables"}

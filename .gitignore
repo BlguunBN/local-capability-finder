@@ -16,6 +16,9 @@
 !bin/capfind.js
 !capability_finder.py
 !capability_mcp.py
+!auto_skill_router.py
+!auto_install.py
+!auto_hook.py
 !skill_archive.py
 !startup_inventory.py
 !library_catalog.py
@@ -24,5 +27,9 @@
 !organize_skills.py
 !install_agents.py
 !mcp_servers.example.yaml
+!docs/
+!docs/*.md
 !tests/
 !tests/*.py
+!tests/fixtures/
+!tests/fixtures/*.jsonl
