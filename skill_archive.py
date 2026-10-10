@@ -380,10 +380,8 @@ def apply_archive(manifest: dict) -> None:
             shutil.move(str(src), str(dst))
             entry["archive_state"] = "moved"
             write_manifest(manifest)
-            for p in entry["store_paths"]:
+            for p in entry["store_paths"][1:]:
                 alias = Path(p["original_path"])
-                if alias == src:
-                    continue
                 remove_directory_link(alias, p["link_kind"])
                 write_manifest(manifest)
             entry["archive_state"] = "archived"
@@ -420,13 +418,13 @@ def restore_archive(manifest: dict) -> None:
                 raise RuntimeError(f"archive missing, unsafe, or modified: {archived}")
         elif not source.is_dir() or tree_hash(source) != entry["source_sha256"]:
             raise RuntimeError(f"neither intact archive nor source is available: {archived}")
-        for p in entry["store_paths"]:
+        for index, p in enumerate(entry["store_paths"]):
             original = Path(p["original_path"])
             parent = original.parent
             expected_root = Path(p["store_root"])
             if not inside(parent, USER_ROOT) or not inside(expected_root, USER_ROOT) or parent.resolve(strict=True) != expected_root.resolve(strict=True):
                 raise RuntimeError(f"restore parent is unsafe: {parent}")
-            if original == source:
+            if index == 0:
                 if original.exists() and archived.exists():
                     raise RuntimeError(f"both source and archive exist: {original}")
             elif original.exists() or is_link(original):
@@ -447,9 +445,9 @@ def restore_archive(manifest: dict) -> None:
             if archived.exists():
                 canonical.parent.mkdir(parents=True, exist_ok=True)
                 shutil.move(str(archived), str(canonical))
-            for p in entry["store_paths"]:
+            for p in entry["store_paths"][1:]:
                 alias = Path(p["original_path"])
-                if alias == canonical or alias.exists() or is_link(alias):
+                if alias.exists() or is_link(alias):
                     continue
                 alias.parent.mkdir(parents=True, exist_ok=True)
                 recreate_link(alias, p["link_target"], p["link_kind"])
