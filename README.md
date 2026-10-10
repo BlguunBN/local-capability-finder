@@ -179,6 +179,8 @@ python capability_finder.py activate skill:EXACT_ID --agent codex --dry-run
 python capability_finder.py activate skill:EXACT_ID --agent codex
 python capability_finder.py activate skill:EXACT_ID --agent codex --copy
 python capability_finder.py deactivate skill:EXACT_ID --agent codex
+python capability_finder.py validate skill:EXACT_ID --apply-trust
+python capability_finder.py trust skill:EXACT_ID needs_review --reason "audit note"
 python capability_finder.py doctor
 ```
 

@@ -19,6 +19,21 @@ synthetic fixture unless noted. No user skill files were touched.
   Stack. Verified end-to-end over stdio: search → get → load serves one
   SKILL.md without loading anything else.
 
+## P6 changes (2026-10-10)
+
+- `validate <id>` lints metadata/paths/references and runs heuristic
+  supply-chain checks (remote-exec, credential exfiltration, embedded
+  secrets, traversal, endpoints) over SKILL.md plus adjacent scripts —
+  read-only, nothing is ever executed. Findings are severity-graded and
+  explicitly heuristic, not proof.
+- `trust <id> <status|clear> --reason` records manual approvals/blocks in
+  `trust-overrides.json` with decided-by/at audit trail; `validate
+  --apply-trust` records `needs_review` on high findings. Overrides apply
+  live in `show()` (activation gates effective immediately) and bake in at
+  refresh. Doctor reports `STALE_SCAN` when a skill changes after review.
+- Optional `skillspector` adapter: availability/version recorded, never
+  auto-run.
+
 ## P5 changes (2026-10-10)
 
 - Link-first activation with hash-verified `--copy` fallback

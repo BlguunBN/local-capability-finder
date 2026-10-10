@@ -293,6 +293,12 @@ def _assign_canonical_ids(grouped: dict, home: Path, library: Path) -> None:
                 suffix = hashlib.sha256(item["source_path"].casefold().encode()).hexdigest()[:8]
                 item["id"] = f"{base}:{suffix}"
             item["legacy_ids"] = [item.pop("legacy_id")]
+    overrides = _trust_overrides(library)
+    for item in grouped.values():
+        override = overrides.get(item["id"])
+        if isinstance(override, dict) and override.get("status") in VALID_STATUSES:
+            item["trust_status"] = override["status"]
+            item["trust_reason"] = override.get("reason", "")
     lock = _read_lock(library)
     for item in grouped.values():
         item["content_hash"] = _content_hash(item["source_path"])
@@ -802,6 +808,8 @@ def search(query: str, kind: str | None = None, limit: int = 3, home: Path | Non
         rows.insert(0, _compact_row(exact_id_hit, {"exact"}, active_stores))
     return rows[:limit]
 def show(capability_id: str, home: Path | None = None, library: Path | None = None) -> dict | None:
+    home, library = _paths(home, library)
+    overrides = _trust_overrides(library)
     capabilities = _load(home, library)["capabilities"]
     for item in capabilities:
         if item["id"] == capability_id or capability_id in item.get("legacy_ids", []):
@@ -819,6 +827,10 @@ def show(capability_id: str, home: Path | None = None, library: Path | None = No
                 detail["usage"] = "Use through the installed Codex plugin; source_path identifies its manifest."
             if item["type"] == "skill" and not Path(item["source_path"]).is_file():
                 detail["installation_state"] = "broken"
+            override = overrides.get(item["id"], {})
+            if isinstance(override, dict) and override.get("status") in VALID_STATUSES:
+                detail["trust_status"] = override["status"]
+                detail["trust_reason"] = override.get("reason", "")
             return detail
     return None
 
@@ -1115,6 +1127,173 @@ def deactivate_skill(capability_id: str, agent: str, home: Path | None = None, l
     return result
 
 
+VALID_STATUSES = ("approved", "unscanned", "needs_review", "blocked")
+
+_F_SECRET = re.compile(r"(?i)\b[\w-]*(api[_-]?key|access[_-]?token|auth[_-]?token|secret|password|personal[_-]?access[_-]?token)[\w-]*")
+_F_SEND = re.compile(r"(?i)\b(requests\.(post|put)|urllib|httpx|curl|wget|Invoke-WebRequest|Invoke-RestMethod|fetch\()\b")
+_F_REMOTE_EXEC = re.compile(r"(?i)(curl|wget)[^\n]*\|\s*(sh|bash)|Invoke-Expression|DownloadString|\biex\s*\(")
+_F_EMBEDDED_SECRET = re.compile(r"\b(sk-[A-Za-z0-9-]{8,}|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{8,}|xox[bpas]-[A-Za-z0-9-]{8,})\b")
+_F_TRAVERSAL = re.compile(r"\.\./")
+_F_WRITE = re.compile(r"(?i)\b(open\s*\(|fopen\s*\(|write\b|copy\b|move\b|shutil\b)")
+_F_URL = re.compile(r"https?://[^\s)\"'<>]+")
+
+
+def _trust_overrides_path(library: Path) -> Path:
+    return library / "trust-overrides.json"
+
+
+def _trust_overrides(library: Path) -> dict:
+    data = _read_json(_trust_overrides_path(library))
+    if isinstance(data, dict) and isinstance(data.get("overrides"), dict):
+        return data["overrides"]
+    return {}
+
+
+def _write_trust_overrides(library: Path, overrides: dict) -> None:
+    dest = _trust_overrides_path(library)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=dest.parent,
+                                     prefix=".trust-overrides-", suffix=".json", delete=False) as fh:
+        json.dump({"schema_version": 1, "overrides": overrides}, fh, ensure_ascii=False, indent=2)
+        tmp = Path(fh.name)
+    os.replace(tmp, dest)
+
+
+def set_trust_override(capability_id: str, status: str, reason: str = "",
+                       home: Path | None = None, library: Path | None = None) -> dict:
+    """Record a manual trust decision with an audit trail. `clear` removes it."""
+    home, library = _paths(home, library)
+    item = show(capability_id, home, library)
+    if item is None or item["type"] != "skill":
+        raise CapError("NOT_FOUND", f"unknown skill ID: {capability_id}")
+    if status not in (*VALID_STATUSES, "clear"):
+        raise ValueError(f"status must be one of {(*VALID_STATUSES, 'clear')}")
+    overrides = _trust_overrides(library)
+    if status == "clear":
+        overrides.pop(item["id"], None)
+    else:
+        overrides[item["id"]] = {"status": status, "reason": reason,
+                                 "decided_by": "cli-operator",
+                                 "decided_at_epoch": time.time(),
+                                 "last_scanned_revision": item.get("content_hash")}
+    _write_trust_overrides(library, overrides)
+    if status == "clear":
+        item = show(capability_id, home, library)
+        return {"id": item["id"], "trust_status": item.get("trust_status")}
+    return {"id": item["id"], "trust_status": status}
+
+
+def _scanner_info() -> dict:
+    """Detect an optional third-party skill scanner without running any scan."""
+    probe = shutil.which("skillspector")
+    if not probe:
+        return {"name": "skillspector", "available": False}
+    try:
+        result = subprocess.run([probe, "--version"], capture_output=True, text=True,
+                                timeout=15, encoding="utf-8", errors="replace")
+        output = (result.stdout or result.stderr or "").strip().splitlines()
+        version = output[0].strip() if output else "unknown"
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {"name": "skillspector", "available": False, "error": str(exc)}
+    return {"name": "skillspector", "available": True, "version": version,
+            "probed_at_epoch": time.time()}
+
+
+def _scan_texts(root: Path) -> list[tuple[str, str]]:
+    """Read SKILL.md plus adjacent scripts/configs, read-only, size-capped."""
+    texts = []
+    candidates = [root / "SKILL.md"]
+    try:
+        entries = sorted(root.rglob("*"))[:200]
+    except OSError:
+        entries = []
+    for entry in entries:
+        if entry.is_file() and not entry.is_symlink() and entry.suffix.lower() in (
+                ".md", ".sh", ".ps1", ".py", ".js", ".ts", ".yaml", ".yml",
+                ".json", ".toml", ".txt"):
+            candidates.append(entry)
+    seen = set()
+    for path in candidates:
+        try:
+            key = path.resolve()
+        except OSError:
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            if path.stat().st_size > 1024 * 1024:
+                continue
+            texts.append((str(path.relative_to(root)), path.read_text(encoding="utf-8", errors="replace")))
+        except OSError:
+            continue
+    return texts
+
+
+def validate_skill(capability_id: str, home: Path | None = None, library: Path | None = None,
+                   apply_trust: bool = False) -> dict:
+    """Lint one skill and run heuristic supply-chain checks. Never executes anything."""
+    home, library = _paths(home, library)
+    item = show(capability_id, home, library)
+    if item is None or item["type"] != "skill":
+        raise CapError("NOT_FOUND", f"unknown skill ID: {capability_id}")
+    findings: list[dict] = []
+    if not item.get("description"):
+        findings.append({"level": "medium", "code": "MISSING_DESCRIPTION",
+                         "detail": "frontmatter has no usable description"})
+    if item.get("version") is None:
+        findings.append({"level": "info", "code": "VERSION_MISSING",
+                         "detail": "no version declared in frontmatter"})
+    root = Path(item["source_path"]).parent
+    if Path(item["name"]).name != root.name:
+        findings.append({"level": "medium", "code": "NAME_MISMATCH",
+                         "detail": f"frontmatter name {item['name']!r} differs from folder {root.name!r}"})
+    texts = _scan_texts(root)
+    if not texts:
+        findings.append({"level": "high", "code": "SOURCE_UNREADABLE",
+                         "detail": f"cannot read skill sources under {root}"})
+    scripts = [rel for rel, _ in texts[1:]]
+    if scripts:
+        findings.append({"level": "info", "code": "SCRIPTS_PRESENT",
+                         "detail": f"ships executable-adjacent files (never auto-executed): {scripts[:5]}"})
+    for rel, text in texts:
+        if _F_REMOTE_EXEC.search(text):
+            findings.append({"level": "high", "code": "REMOTE_EXEC",
+                             "detail": f"{rel}: downloads and executes remote code"})
+        if _F_SECRET.search(text) and _F_SEND.search(text):
+            findings.append({"level": "high", "code": "CRED_EXFIL",
+                             "detail": f"{rel}: handles credentials and sends network requests"})
+        if _F_EMBEDDED_SECRET.search(text):
+            findings.append({"level": "high", "code": "EMBEDDED_SECRET",
+                             "detail": f"{rel}: looks like an embedded API secret"})
+        if _F_TRAVERSAL.search(text) and _F_WRITE.search(text):
+            findings.append({"level": "medium", "code": "PATH_TRAVERSAL",
+                             "detail": f"{rel}: parent-directory reference near file writes"})
+    urls = sorted({match.group(0) for _, text in texts for match in _F_URL.finditer(text)})
+    if urls:
+        findings.append({"level": "info", "code": "EXTERNAL_ENDPOINTS",
+                         "detail": f"references {len(urls)} external URL(s): {urls[:5]}"})
+    scanner = _scanner_info()
+    if not scanner["available"]:
+        findings.append({"level": "info", "code": "SCANNER_UNAVAILABLE",
+                         "detail": "skillspector not installed; heuristic checks only"})
+    applied = None
+    if apply_trust and any(f["level"] == "high" for f in findings):
+        record = {"status": "needs_review",
+                  "reason": "validate found high-severity findings: " + ", ".join(
+                      sorted({f["code"] for f in findings if f["level"] == "high"})),
+                  "decided_by": "validate --apply-trust",
+                  "decided_at_epoch": time.time(),
+                  "last_scanned_revision": item.get("content_hash"),
+                  "scanner": scanner}
+        overrides = _trust_overrides(library)
+        overrides[item["id"]] = record
+        _write_trust_overrides(library, overrides)
+        applied = "needs_review"
+    return {"id": item["id"], "trust_status": applied or item.get("trust_status"),
+            "revision": item.get("content_hash"), "scanner": scanner,
+            "findings": findings}
+
 def doctor(home: Path | None = None, library: Path | None = None) -> list[dict]:
     """Inspect index health, skill links, and activation/archive manifests."""
     home, library = _paths(home, library)
@@ -1156,6 +1335,23 @@ def doctor(home: Path | None = None, library: Path | None = None) -> list[dict]:
                 elif not os.path.lexists(target) or (recorded and not _points_at(target, Path(recorded))):
                     findings.append({"level": "warning", "code": "ACTIVATION_DRIFT",
                                      "detail": f"{data.get('id')} for {data.get('agent')}: target missing or moved: {target}"})
+    try:
+        raw_overrides = _trust_overrides_path(library).read_text(encoding="utf-8")
+        corrupt = bool(raw_overrides.strip()) and not isinstance(
+            json.loads(raw_overrides).get("overrides"), dict)
+    except (OSError, ValueError):
+        corrupt = "unreadable" if _trust_overrides_path(library).exists() else False
+    if corrupt:
+        findings.append({"level": "warning", "code": "CORRUPT_MANIFEST",
+                         "detail": f"trust overrides file is corrupt: {_trust_overrides_path(library)}"})
+    else:
+        revisions = {c.get("id"): c.get("content_hash")
+                     for c in payload.get("capabilities", []) if isinstance(c, dict)}
+        for override_id, override in _trust_overrides(library).items():
+            scanned = override.get("last_scanned_revision") if isinstance(override, dict) else None
+            if scanned and override_id in revisions and revisions[override_id] != scanned:
+                findings.append({"level": "warning", "code": "STALE_SCAN",
+                                 "detail": f"{override_id} changed since its last validation"})
     archive = library / "on-demand"
     if archive.is_dir():
         for entry in sorted(archive.glob("*manifest.json")):
@@ -1197,6 +1393,14 @@ def main(argv: list[str] | None = None) -> int:
     deact = sub.add_parser("deactivate")
     deact.add_argument("id")
     deact.add_argument("--agent", required=True, choices=sorted(AGENT_DIRS))
+    valid = sub.add_parser("validate")
+    valid.add_argument("id")
+    valid.add_argument("--apply-trust", action="store_true",
+                       help="record needs_review when high-severity findings exist")
+    trust_cmd = sub.add_parser("trust")
+    trust_cmd.add_argument("id")
+    trust_cmd.add_argument("status", choices=[*VALID_STATUSES, "clear"])
+    trust_cmd.add_argument("--reason", default="")
     doc = sub.add_parser("doctor")
     doc.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
@@ -1224,6 +1428,12 @@ def main(argv: list[str] | None = None) -> int:
                                         method="copy" if args.copy else "link"), ensure_ascii=False))
         elif args.command == "deactivate":
             print(json.dumps(deactivate_skill(args.id, args.agent), ensure_ascii=False))
+        elif args.command == "validate":
+            print(json.dumps(validate_skill(args.id, apply_trust=args.apply_trust),
+                             ensure_ascii=False, indent=2))
+        elif args.command == "trust":
+            print(json.dumps(set_trust_override(args.id, args.status, args.reason),
+                             ensure_ascii=False))
         else:
             findings = doctor()
             if args.json:
