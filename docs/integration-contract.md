@@ -73,6 +73,12 @@ approval channel must fail closed via `prepare_activation` findings.
 | 0.1.x + P1–P4 (this branch) | any Stack reading only `source_path` + SKILL.md | works today; no Stack changes needed |
 | Contract v1 final | Stack S5+ (adopts `load_skill`/registration/approval) | joint sign-off required |
 
+Pinned verification (this session): Finder branch
+`capfind/plan-implementation` at P8 registers the companion checkout and
+resolves all 18 suites as `aes:skill:*` with no native installation; joint
+fixture suite `tests/test_p8_joint.py` (10 scenarios) passes. No
+`main`-coupling: releases pin a Finder range against a Stack range.
+
 Minor releases preserve read-only v1 compatibility. The Finder never imports
 Stack code; the Stack must use this public surface. No `main`-coupling:
 pin a Finder release range against a Stack release range at ship time.

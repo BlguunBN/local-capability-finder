@@ -19,6 +19,18 @@ synthetic fixture unless noted. No user skill files were touched.
   Stack. Verified end-to-end over stdio: search → get → load serves one
   SKILL.md without loading anything else.
 
+## P8 changes (2026-10-10)
+
+- Joint fixture suite `tests/test_p8_joint.py` (10 scenarios) proves the
+  combined system: `aes` namespace registration, single-suite on-demand
+  load, revision-stable IDs, specialist fallback, dry-run → apply → verify
+  → rollback, duplicate-source disambiguation, blocked-import inertness
+  with inspectable metadata, explicit downtime/registration failures, and
+  lightweight startup context (<2,400 result bytes).
+- Versioned Finder↔Stack table in `docs/integration-contract.md`;
+  companion `agentic-engineering-stack/docs/compatibility.md` updated on
+  its `main` (commit `f6d7cda`) — Stack S5 unblocked for adoption.
+
 ## P7 changes (2026-10-10)
 
 - Read-only `metrics` snapshot (CLI + `collect_metrics`): capability counts
