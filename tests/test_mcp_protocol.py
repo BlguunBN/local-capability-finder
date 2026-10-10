@@ -29,13 +29,14 @@ class MCPProtocolTests(unittest.TestCase):
         self.assertEqual(["2026-07-28"], result["supportedVersions"])
         self.assertEqual({"tools": {}}, result["capabilities"])
         self.assertEqual("local-capability-finder", result["_meta"]["io.modelcontextprotocol/serverInfo"]["name"])
+        self.assertEqual("0.2.0", result["_meta"]["io.modelcontextprotocol/serverInfo"]["version"])
         self.assertEqual("public", result["cacheScope"])
         self.assertGreaterEqual(result["ttlMs"], 0)
 
     def test_modern_tools_work_without_initialize(self):
         listed = capability_mcp._dispatch(request("tools/list", {"_meta": MODERN_META}))
         self.assertEqual("complete", listed["result"]["resultType"])
-        self.assertEqual(8, len(listed["result"]["tools"]))
+        self.assertEqual(9, len(listed["result"]["tools"]))
         self.assertEqual("public", listed["result"]["cacheScope"])
         self.assertGreaterEqual(listed["result"]["ttlMs"], 0)
         self.assertIn("io.modelcontextprotocol/serverInfo", listed["result"]["_meta"])
@@ -59,6 +60,13 @@ class MCPProtocolTests(unittest.TestCase):
         self.assertEqual(-32022, unsupported["error"]["code"])
         self.assertEqual({"requested": "2099-01-01", "supported": ["2026-07-28"]}, unsupported["error"]["data"])
 
+    def test_contract_handshake_is_explicit_and_versioned(self):
+        info = capability_mcp._call_tool("get_contract_info", {})
+        self.assertEqual("local-capability-finder", info["contract"])
+        self.assertEqual(1, info["version"])
+        self.assertEqual("library_catalog.py register-source", info["registration"])
+        self.assertTrue({"register_source", "search", "get", "load", "activation-preview", "activation"}.issubset(info["features"]))
+
     def test_search_forwards_agent_and_project_hint(self):
         with patch("capability_finder.search", return_value=[]) as search:
             capability_mcp._call_tool("search_capabilities", {
@@ -79,7 +87,7 @@ class MCPProtocolTests(unittest.TestCase):
         self.assertEqual("2025-11-25", initialized["result"]["protocolVersion"])
         listed = capability_mcp._dispatch(request("tools/list", {"_meta": {"progressToken": "x"}}))
         self.assertNotIn("resultType", listed["result"])
-        self.assertEqual(8, len(listed["result"]["tools"]))
+        self.assertEqual(9, len(listed["result"]["tools"]))
 
     def test_modern_stdio_wire_without_initialize(self):
         server = Path(capability_mcp.__file__)
@@ -92,7 +100,7 @@ class MCPProtocolTests(unittest.TestCase):
         responses = [json.loads(line) for line in process.stdout.splitlines()]
         self.assertEqual(2, len(responses))
         self.assertEqual(["2026-07-28"], responses[0]["result"]["supportedVersions"])
-        self.assertEqual(8, len(responses[1]["result"]["tools"]))
+        self.assertEqual(9, len(responses[1]["result"]["tools"]))
         self.assertEqual("", process.stderr)
 
 

@@ -54,10 +54,11 @@ class MetricsTests(unittest.TestCase):
         self.assertGreaterEqual(metrics["catalog"]["capabilities"], 1)
         self.assertEqual(1, metrics["catalog"]["by_type"].get("skill"))
         self.assertGreater(metrics["catalog"]["index_bytes"], 0)
+        self.assertGreaterEqual(metrics["catalog"]["last_indexed_in_seconds"], 0)
         self.assertEqual(8, metrics["search"]["queries"])
         for key in ("p50_ms", "p95_ms", "max_result_bytes"):
             self.assertIsInstance(metrics["search"][key], (int, float))
-        self.assertEqual(8, metrics["mcp"]["tools"])
+        self.assertEqual(9, metrics["mcp"]["tools"])
         self.assertEqual("2025-11-25", metrics["mcp"]["protocol"])
         self.assertIn("estimate", metrics["note"])
         # Read-only: the index file is byte-identical afterwards.

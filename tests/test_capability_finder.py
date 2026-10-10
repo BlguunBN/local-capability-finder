@@ -358,7 +358,7 @@ class CapabilityFinderTests(unittest.TestCase):
             {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
         )
         self.assertEqual(
-            {"search_capabilities", "get_capability", "load_skill", "get_tool_schema",
+            {"get_contract_info", "search_capabilities", "get_capability", "load_skill", "get_tool_schema",
              "prepare_activation", "activate_skill", "deactivate_skill", "refresh_catalog"},
             {tool["name"] for tool in response["result"]["tools"]},
         )

@@ -3,9 +3,15 @@
 Branch: `capfind/plan-implementation`. All measurements on an isolated
 synthetic fixture unless noted. No user skill files were touched.
 
+## P9 Contract v1 adoption (2026-10-10)
+
+- Added the `get_contract_info` MCP handshake; server/package version 0.2.0 exposes semantic Contract v1 separately from MCP transport.
+- Stack source registration remains the documented CLI; integration verifies all 18 IDs over public MCP without activating or installing them.
+- Stack-side live stdio tests cover search, exact load, personal-skill search, approval-gated activation/deactivation, and disposable homes.
+
 ## P4 changes (2026-10-10)
 
-- MCP surface is now 8 tools: added `load_skill` (exact-ID SKILL.md with
+- MCP surface is now 9 tools: added `load_skill` (exact-ID SKILL.md with
   revision check), `get_tool_schema` (stored probed schemas, honest
   descriptor otherwise), `prepare_activation` (dry-run + findings +
   `approval_required`), `deactivate_skill`, `refresh_catalog`.
@@ -74,7 +80,7 @@ synthetic fixture unless noted. No user skill files were touched.
 - CLI: `capability_finder.py {refresh,search,show,activate}`,
   `library_catalog.py`, `skill_archive.py`, `install_agents.py`,
   `capfind auto {enable,status,disable,test}` (node `bin/capfind.js`).
-- MCP tools: `search_capabilities`, `get_capability`, `load_skill`,
+- MCP tools: `get_contract_info`, `search_capabilities`, `get_capability`, `load_skill`,
   `get_tool_schema`, `prepare_activation`, `activate_skill`,
   `deactivate_skill`, `refresh_catalog` (Contract v1, see
   `docs/integration-contract.md`).

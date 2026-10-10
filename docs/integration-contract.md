@@ -1,84 +1,35 @@
-# Integration contract v1 (Finder ↔ Engineering Stack)
+# Integration Contract v1 (Finder ↔ Engineering Stack)
 
-Status: implemented in Finder for skills; Stack S5 stays mock-only until it
-adopts this document. Changes here require a joint version bump.
+Status: implemented in Finder 0.2.x. Stack consumes the public MCP tools and the documented source-registration CLI. Changes to the semantic contract require a major-version change; MCP transport version is separate.
 
-## Record schema (`schema_version: 1`)
+## Identity and ownership
 
-Skills carry stable IDs `<source>:skill:<slug>` (e.g.
-`aes:skill:systematic-debugging-suite`). Previous `skill:<hash>` IDs keep
-resolving via `legacy_ids`. Content revisions change `content_hash`
-(`sha256:…`), never the stable ID. Same-name records from different sources
-keep distinct IDs and cross-link through `alternate_versions`.
+Skill IDs are stable `<source>:skill:<slug>` values (for Stack: `aes:skill:<suite-folder>`). Content changes update `content_hash`, never the canonical ID. Same-name skills from different sources remain separate IDs. Stack owns suite content and manifest; Finder owns its derived index, trust, activation manifests, and installation lifecycle.
 
-Fields: `id, kind(skill), name, description, source_id, source_path,
-version|null, tags[], compatible_agents[], requirements[], content_hash,
-trust_status, installation_state, managed_targets[], legacy_ids[]`.
+Register an explicit source with `library_catalog.py register-source --id aes --path <stack>/suites`. Refresh the catalog afterward. This registers metadata only; it does not install or activate any skill. Source registration is available through the documented CLI, not agent-callable MCP, to keep trust decisions explicit.
 
-- `trust_status`: `approved | unscanned | needs_review | blocked`.
-  `approved` records a specific decision (first-party local roots, or an
-  explicit source registration), not a safety guarantee.
-- `installation_state`: `available | archived | broken` (`broken` is
-  evaluated at read time when the source file is gone).
-- `managed_targets[]`: `{agent, path, method, revision|null}`; `method` is
-  the link kind for Finder-managed activations, `unmanaged` for
-  pre-existing native installs the Finder did not create.
+## Version handshake
 
-Tools and plugins keep their existing hash IDs in v1; skill coverage is
-normative, tool/plugin canonicalization is deferred.
+The MCP tool `get_contract_info` returns `{contract, version, features, registration}`. Contract v1 identifies as `local-capability-finder`, version `1`; do not infer it from the MCP transport protocol or the package version. Stack must fail clearly if the handshake is absent or required features are missing.
 
-## MCP surface (8 tools, bounded `tools/list`)
+## MCP surface (9 tools)
 
-Read-only (never install, mutate, download, or execute):
+Read-only: `get_contract_info`, `search_capabilities`, `get_capability`, `load_skill`, `get_tool_schema`.
 
-| Tool | Inputs | Output | Rules |
-|---|---|---|---|
-| `search_capabilities` | `query`, `kind?`, `limit?` (1–20, default 3), `agent?`, `project_hint?` (≤200 chars) | `{id, type, name, reason, availability, matched}[]` | never full content |
-| `get_capability` | `capability_id` | full record + `usage` | no execution |
-| `load_skill` | `capability_id`, `revision?` | `{id, name, source_path, revision, trust_status, content}` (SKILL.md only) | `STALE_REVISION` on mismatch |
-| `get_tool_schema` | `capability_id` | `{id, server, tool, description, schema\|null, note?}` | stored schemas only (captured by explicit `--probe-tools` refresh) |
+State-changing/maintenance: `prepare_activation` (dry-run), `activate_skill`, `deactivate_skill`, `refresh_catalog`.
 
-State-changing (explicit; idempotent where safe):
+`search_capabilities` returns bounded metadata only. `load_skill(id, revision?)` returns one SKILL.md and rejects stale revisions. `get_capability` includes `trust_status`, `compatible_agents`, and content hash. `get_tool_schema` returns a captured schema or an explicit null descriptor.
 
-| Tool | Behavior |
-|---|---|
-| `prepare_activation` | dry-run plan + `findings[]` + `approval_required`; zero filesystem changes |
-| `activate_skill` | applies an approved plan, writes manifest + lockfile; `already_active` when present; `confirm_untrusted` required for `needs_review`/`unscanned`; `blocked` always refused |
-| `deactivate_skill` | removes only a managed link (`already_removed` when absent; refuses unmanaged paths) |
-| `refresh_catalog` | rebuilds the index; `{indexed, path}` |
+## Approval and safety
 
-Every tool call appends one JSON line to `<library>/_audit.log`
-(tool, status, scalar arguments, error code). No credentials are logged.
+`prepare_activation` makes no filesystem changes and returns a plan plus findings. Stack records an exact approval (`action`, `target`, `plan_id`, approver, reference), fingerprints the preview, and obtains a new preview immediately before calling `activate_skill`. Finder blocks `blocked` skills and requires `confirm_untrusted` for `needs_review` and `unscanned` content. Deactivation is restricted to Finder-managed targets; unmanaged files are never overwritten or removed.
+
+Search and load do not activate or execute skills. Search results are untrusted metadata. Read-only calls and state-changing calls are audited without credentials.
 
 ## Errors
 
-JSON-RPC `-32602` with `data: {code}` for contract failures:
+Contract failures use stable `data.code` values, including `NOT_FOUND`, `AMBIGUOUS_ID`, `UNTRUSTED`, `UNSUPPORTED_AGENT`, `CONFLICT`, `INVALID_PATH`, `STALE_REVISION`, `PERMISSION_DENIED`, and `ROLLBACK_FAILED`. Unexpected backend failures are marked `EXECUTION_FAILED`. `AMBIGUOUS_ID` is reserved: duplicate names never error, they resolve by exact ID with alternatives listed in `alternate_versions`.
 
-`NOT_FOUND, AMBIGUOUS_ID, UNTRUSTED, UNSUPPORTED_AGENT, CONFLICT,
-INVALID_PATH, STALE_REVISION, PERMISSION_DENIED, ROLLBACK_FAILED`
-(+ `EXECUTION_FAILED` for unexpected backend failures).
-`activate_skill` on an occupied target returns `CONFLICT`, never overwrites.
+## Compatible Stack
 
-## Approval rule
-
-Durable activation requires approval: an explicit `confirm_untrusted`
-(or CLI `--yes`) for anything not `approved`; interactive CLI use counts as
-its own approval channel for `approved` skills. Hosts without a reliable
-approval channel must fail closed via `prepare_activation` findings.
-
-## Compatibility
-
-| Finder | Stack | Notes |
-|---|---|---|
-| 0.1.x + P1–P4 (this branch) | any Stack reading only `source_path` + SKILL.md | works today; no Stack changes needed |
-| Contract v1 final | Stack S5+ (adopts `load_skill`/registration/approval) | joint sign-off required |
-
-Pinned verification (this session): Finder branch
-`capfind/plan-implementation` at P8 registers the companion checkout and
-resolves all 18 suites as `aes:skill:*` with no native installation; joint
-fixture suite `tests/test_p8_joint.py` (10 scenarios) passes. No
-`main`-coupling: releases pin a Finder range against a Stack range.
-
-Minor releases preserve read-only v1 compatibility. The Finder never imports
-Stack code; the Stack must use this public surface. No `main`-coupling:
-pin a Finder release range against a Stack release range at ship time.
+Stack 0.1.x Contract v1 adapter uses Finder 0.2.x. Its stdio integration registers all 18 Stack IDs, searches and loads one exact suite, keeps personal capabilities discoverable, and tests approved activation/deactivation in a disposable home. Release CI must pin both project revisions; do not depend on floating `main` branches.

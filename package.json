@@ -1,6 +1,6 @@
 {
   "name": "local-capability-finder-cli",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Local CLI and MCP setup for finding installed agent capabilities",
   "homepage": "https://github.com/BlguunBN/local-capability-finder#readme",
   "repository": {

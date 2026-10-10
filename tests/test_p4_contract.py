@@ -158,6 +158,12 @@ class ContractTests(unittest.TestCase):
         )
         self.assertEqual("CONFLICT", response["error"]["data"]["code"])
 
+    def test_invalid_paths_carry_structured_code(self):
+        with self.assertRaises(finder.CapError) as ctx:
+            finder._validate_skill_name("../escape")
+        self.assertEqual("INVALID_PATH", ctx.exception.code)
+        self.assertIsInstance(ctx.exception, ValueError)
+
     def test_prepare_is_dry_run_with_findings(self):
         cap_id = self.approved_id()
         prepared = self.call(
@@ -329,7 +335,7 @@ class ContractTests(unittest.TestCase):
             json.loads(line)["id"]: json.loads(line)
             for line in proc.stdout.splitlines()
         }
-        self.assertEqual(8, len(responses[2]["result"]["tools"]))
+        self.assertEqual(9, len(responses[2]["result"]["tools"]))
         self.assertIn(cap_id, responses[3]["result"]["content"][0]["text"])
         body = responses[4]["result"]["content"][0]["text"]
         self.assertIn("body text", body)

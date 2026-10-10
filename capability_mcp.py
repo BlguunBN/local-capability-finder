@@ -9,7 +9,7 @@ from typing import Any
 _PROTOCOL_VERSION = "2025-11-25"
 _MODERN_PROTOCOL_VERSION = "2026-07-28"
 _SUPPORTED_HANDSHAKE_VERSIONS = {"2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"}
-_SERVER_INFO = {"name": "local-capability-finder", "version": "0.1.2"}
+_SERVER_INFO = {"name": "local-capability-finder", "version": "0.2.0"}
 _META_PREFIX = "io.modelcontextprotocol/"
 
 
@@ -37,6 +37,11 @@ def _audit(tool: str, arguments: Any, status: str, code: str | None = None) -> N
 
 def _tool_definitions() -> list[dict[str, Any]]:
     return [
+        {
+            "name": "get_contract_info",
+            "description": "Return the Local Capability Finder public contract version and supported features.",
+            "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+        },
         {
             "name": "search_capabilities",
             "description": "Search local skills, tools, and plugins. Returns up to three concise matches by default.",
@@ -163,6 +168,14 @@ def _require_agent(arguments: Any) -> str:
 def _call_tool(name: str, arguments: Any) -> Any:
     if not isinstance(arguments, dict):
         raise ValueError("Tool arguments must be an object")
+
+    if name == "get_contract_info":
+        return {
+            "contract": "local-capability-finder",
+            "version": 1,
+            "features": ["register_source", "search", "get", "load", "activation-preview", "activation", "deactivation", "tool-schema"],
+            "registration": "library_catalog.py register-source",
+        }
 
     # Import on demand so protocol discovery can still work while the finder is
     # being installed or if a deployment has not yet configured its data files.

@@ -1,26 +1,21 @@
-# Compatibility matrix
+# Finder ↔ Stack Compatibility Matrix
 
-## Finder <-> Stack contract
-
-| Item | Finder (this repo) | Stack expects (Contract v1 proposal) | Status |
+| Contract item | Finder 0.2.x | Stack Contract v1 adapter | Status |
 |---|---|---|---|
-| `search_capabilities` | implemented (lightweight rows) | same | compatible |
-| `get_capability` | implemented (metadata + paths) | same | compatible |
-| `load_skill` (exact-ID content) | **missing** (callers read `source_path`) | required | gap (P4) |
-| `get_tool_schema` | missing | required if tool sources supported | gap (P4) |
-| `prepare_activation` / `deactivate_skill` | missing | required | gap (P4/P5) |
-| Stable IDs `<source>:<kind>:<slug>` | implemented for skills (legacy hash IDs still resolve) | required | compatible (P2) |
-| `schema_version`, trust/installation states | implemented (`schema_version: 1`; trust `approved/unscanned/needs_review/blocked`; installation `available/archived/broken`) | required | compatible (P2) |
-| Source registration (`aes` namespace) | implemented (`register-source`; live `aes` registration resolves 18/18 Stack suites with no native install) | required | compatible (P2) |
-| Structured errors (`NOT_FOUND`, `CONFLICT`, ...) | plain `ValueError` strings | required | gap (P4) |
+| Version handshake | MCP `get_contract_info` returns contract/version/features | Rejects missing/unsupported versions | Tested over stdio MCP |
+| Source registration | Documented `library_catalog.py register-source` CLI | Registers `aes` from validated manifest; verifies all IDs through MCP | Tested in disposable library |
+| Stable IDs/revisions | `<source>:skill:<slug>`; content hash changes independently | Verifies exact IDs and requested revisions | Tested |
+| Search/metadata | Bounded `search_capabilities` and exact `get_capability` | Preserves personal Tier 2 matches as metadata | Tested |
+| Single-skill read | `load_skill(id, revision?)` | Loads exact selected body only, after trust/compatibility checks | Tested |
+| Activation preview | `prepare_activation` is a dry-run | Fingerprints preview; requires exact approval and rechecks before mutation | Tested |
+| Lifecycle | `activate_skill`, `deactivate_skill` enforce trust/ownership | Applies only approved activation and managed deactivation | Tested in disposable home |
+| Finder outage/old contract | Server unavailable or no v1 handshake | Explicit incompatibility; standalone Stack routing remains available | Unit-tested |
 
-Rule: Stack must use Finder's public MCP/CLI contract; Finder must stay
-independently usable. No shared code imports. Versioned compatibility
-table (Finder range <-> Stack range) replaces `main`-coupling at P8.
+Stack calls only Finder's documented MCP tools and source-registration CLI. It
+does not import Finder Python modules or write Finder indexes, trust state,
+locks, or activation manifests.
 
-## Host adapters (honest status)
-
-`install_agents.py` registers codex, claude, gemini, antigravity, hermes,
-cursor, opencode, omp. Each path is config-file evidence only; per-host
-read/load/activation verification is pending (P5). Unlisted agents are
-unsupported, not guessed.
+Local pairing tested: Finder 0.2.x Contract v1 on
+`capfind/plan-implementation` with current Stack revision. Release workflows
+must pin the Finder version/commit and Stack revision together; do not float on
+`main`.
