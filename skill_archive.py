@@ -6,7 +6,6 @@ or removes skills unless called with --apply. Restore is explicit via --restore.
 from __future__ import annotations
 
 import argparse
-import csv
 import hashlib
 import json
 import os
@@ -17,9 +16,32 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-USER_ROOT = Path.home()
-DATA = ROOT / "on-demand"
-CSV_PATH = ROOT / "skill-pruning" / "specialist_on_demand_candidates.csv"
+USER_ROOT = Path(os.environ.get("CAPFIND_HOME", str(Path.home())))
+
+
+def _default_library() -> Path:
+    override = os.environ.get("CAPFIND_LIBRARY")
+    return Path(override).expanduser() if override else USER_ROOT / "ai-agent-library"
+
+
+def _archive_base(manifest: dict | None = None) -> Path:
+    """Shared vault location: the manifest's own root, else the configured one.
+
+    Older manifests recorded a vault under the repo checkout; honoring the
+    manifest keeps those restores working now that the default lives in the
+    user library. CAPFIND_ARCHIVE overrides the default for new manifests.
+    """
+    if manifest:
+        recorded = manifest.get("archive_root")
+        if isinstance(recorded, str) and recorded:
+            return Path(recorded)
+    override = os.environ.get("CAPFIND_ARCHIVE")
+    if override:
+        return Path(override).expanduser()
+    return _default_library() / "on-demand"
+
+
+DATA = _archive_base()
 MANIFEST = DATA / "pilot-manifest.json"
 PILOT = ["cad-viewer", "bambu-labs", "cudaq-guide", "cuopt-install", "cupynumeric-install"]
 STORE_ROOTS = {
@@ -109,21 +131,24 @@ def link_kind(path: Path) -> str:
     return "directory"
 
 
-def safe_archive_destination(path: Path) -> bool:
-    """Reject symlink/reparse-point parents and any destination outside ROOT."""
-    if not inside(path, ROOT) or not inside(ROOT, USER_ROOT) or is_link(ROOT):
+def safe_archive_destination(path: Path, base: Path | None = None) -> bool:
+    """Reject symlink/reparse-point parents and any destination outside base."""
+    base = base or DATA
+    if not inside(path, base) or not inside(base, USER_ROOT) or is_link(base):
         return False
     current = path
-    while current != ROOT and inside(current, ROOT):
+    while current != base and inside(current, base):
         if current.exists() or current.is_symlink():
             if is_link(current):
                 return False
         current = current.parent
-    return current == ROOT
+    return current == base
 
 
 def remove_directory_link(path: Path, kind: str) -> None:
-    if kind in ("junction", "directory_symlink"):
+    # Junctions need directory removal; every symlink flavor unlinks on all
+    # platforms (os.rmdir on a POSIX directory symlink raises ENOTDIR).
+    if kind == "junction":
         os.rmdir(path)
     else:
         path.unlink()
@@ -172,31 +197,56 @@ def tree_hash(path: Path) -> str:
     return h.hexdigest()
 
 
-def load_candidates() -> dict[str, dict[str, str]]:
-    with CSV_PATH.open(newline="", encoding="utf-8-sig") as f:
-        return {row["name"]: row for row in csv.DictReader(f)}
+def load_candidates(library: Path | None = None) -> dict[str, dict[str, str]]:
+    """Map skill name -> {store: skill_dir} from the generated skill catalog."""
+    catalog = Path(library).expanduser() if library else _default_library()
+    catalog = catalog / "skills_index.json"
+    try:
+        data = json.loads(catalog.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(f"skill catalog unreadable: {catalog}; run: library_catalog.py") from exc
+    rows = data.get("skills", []) if isinstance(data, dict) else []
+    index: dict[str, dict[str, str]] = {}
+    for row in rows:
+        if not isinstance(row, dict) or not row.get("name") or not row.get("path"):
+            continue
+        stores = [str(store) for store in row.get("roots", []) if isinstance(store, str)]
+        if not stores and row.get("source"):
+            stores = [str(row["source"])]
+        for store in stores:
+            index.setdefault(str(row["name"]), {}).setdefault(store, str(row["path"]))
+    return index
 
 
-def build_manifest(names: list[str] | None = None) -> dict:
+def build_manifest(names: list[str] | None = None, library: Path | None = None) -> dict:
     if not safe_archive_destination(DATA):
         raise RuntimeError(f"archive destination escapes user root: {DATA}")
-    candidates = load_candidates()
+    catalog_path = (Path(library).expanduser() if library else _default_library()) / "skills_index.json"
+    candidates = load_candidates(library)
     selected = names or PILOT
     if not selected or len(set(selected)) != len(selected):
         raise RuntimeError("select at least one unique skill name")
     entries = []
     for name in selected:
-        row = candidates.get(name)
-        if row is None:
-            raise RuntimeError(f"pilot skill absent from audited CSV: {name}")
-        stores = [s.strip() for s in row["active_stores"].split(",") if s.strip()]
-        # The audit CSV predates several supported stores. Capture every
-        # existing name entry scanned by find_and_activate.py as well.
+        catalogued = candidates.get(name, {})
+        unknown = [s for s in catalogued if s != "library" and s not in ALL_AGENT_ROOTS]
+        if unknown:
+            raise RuntimeError(f"skill {name} lists stores this archiver cannot manage: {sorted(unknown)}")
+        stores = [s for s in catalogued if s == "library" or s in ALL_AGENT_ROOTS]
+        # Capture every existing name entry in a managed root as well.
         stores.extend(s for s, root in ALL_AGENT_ROOTS.items() if (root / name).exists() or is_link(root / name))
+        if "library" in catalogued:
+            canonical = _default_library() / "skills" / name
+            if (canonical / "SKILL.md").is_file() or canonical.is_symlink():
+                stores.append("library")
         stores = list(dict.fromkeys(stores))
+        if not stores:
+            raise RuntimeError(f"skill absent from catalog and managed roots: {name}")
         paths = []
         for store in stores:
             root = ALL_AGENT_ROOTS.get(store) or STORE_ROOTS.get(store)
+            if store == "library":
+                root = _default_library() / "skills"
             if root is None:
                 raise RuntimeError(f"unrecognized store {store!r} for {name}")
             candidate = root / name
@@ -230,7 +280,7 @@ def build_manifest(names: list[str] | None = None) -> dict:
         entries.append({
             "name": name,
             "archive_batch": MANIFEST.stem,
-            "estimated_list_tokens_across_stores": int(row["estimated_list_tokens_across_stores"]),
+            "estimated_list_tokens_across_stores": 0,
             "source_sha256": tree_hash(source),
             "archive_path": str(archive_path),
             "store_paths": paths,
@@ -241,7 +291,7 @@ def build_manifest(names: list[str] | None = None) -> dict:
         "created_at": datetime.now(timezone.utc).isoformat(),
         "user_root": str(USER_ROOT),
         "archive_root": str(DATA),
-        "candidate_csv": str(CSV_PATH),
+        "catalog": str(catalog_path),
         "candidate_count": len(candidates),
         "selected_names": selected,
         "manifest_path": str(MANIFEST),
@@ -342,6 +392,7 @@ def apply_archive(manifest: dict) -> None:
 def restore_archive(manifest: dict) -> None:
     if manifest.get("status") not in ("archived", "partial_archive", "restoring", "partial_restore"):
         raise RuntimeError("manifest is not in archived state")
+    base = _archive_base(manifest)
     # Preflight every entry before changing anything.
     for entry in manifest["entries"]:
         if entry.get("archive_state") in (None, "pending"):
@@ -352,11 +403,11 @@ def restore_archive(manifest: dict) -> None:
         if (not inside(source, USER_ROOT) or not inside(canonical_root, USER_ROOT)
                 or source.parent.resolve(strict=False) != canonical_root.resolve(strict=False)
                 or source.name != entry["name"]
-                or archived != (DATA / "skills" / entry["archive_batch"] / entry["name"]
-                                if entry.get("archive_batch") else DATA / "skills" / entry["name"])):
+                or archived != (base / "skills" / entry["archive_batch"] / entry["name"]
+                                if entry.get("archive_batch") else base / "skills" / entry["name"])):
             raise RuntimeError(f"manifest contains an unsafe source or archive path for {entry.get('name')}")
         if archived.exists():
-            if not inside(archived, USER_ROOT) or not safe_archive_destination(archived) or not archived.is_dir() or tree_hash(archived) != entry["source_sha256"]:
+            if not inside(archived, USER_ROOT) or not safe_archive_destination(archived, base) or not archived.is_dir() or tree_hash(archived) != entry["source_sha256"]:
                 raise RuntimeError(f"archive missing, unsafe, or modified: {archived}")
         elif not source.is_dir() or tree_hash(source) != entry["source_sha256"]:
             raise RuntimeError(f"neither intact archive nor source is available: {archived}")
@@ -410,8 +461,9 @@ def main() -> int:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--apply", action="store_true", help="perform the archive operation (explicit opt-in)")
     mode.add_argument("--restore", action="store_true", help="restore using the saved manifest")
-    parser.add_argument("--names", help="comma-separated audited skill names for this batch")
-    parser.add_argument("--manifest", help="manifest filename under ai-agent-library/on-demand")
+    parser.add_argument("--names", help="comma-separated catalog skill names for this batch")
+    parser.add_argument("--manifest", help="manifest filename under the archive vault")
+    parser.add_argument("--library", help="skill library root (default: ~/ai-agent-library or CAPFIND_LIBRARY)")
     args = parser.parse_args()
     try:
         global MANIFEST
@@ -435,7 +487,7 @@ def main() -> int:
             names = names or PILOT
             if len(set(names)) != len(names):
                 raise RuntimeError("--names contains duplicate skill names")
-            manifest = build_manifest(names)
+            manifest = build_manifest(names, args.library)
             write_manifest(manifest)
             print(f"dry run: {len(manifest['entries'])} skills; no files moved; manifest: {MANIFEST}")
             if args.apply:
