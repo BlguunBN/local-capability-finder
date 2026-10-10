@@ -13,6 +13,28 @@ _SERVER_INFO = {"name": "local-capability-finder", "version": "0.1.2"}
 _META_PREFIX = "io.modelcontextprotocol/"
 
 
+def _audit(tool: str, arguments: Any, status: str, code: str | None = None) -> None:
+    """Append one audit line per tool call. Arguments are IDs/names only."""
+    try:
+        import time
+
+        import capability_finder as finder
+
+        _, library = finder._paths(None, None)
+        entry: dict[str, Any] = {"ts": time.time(), "tool": tool, "status": status}
+        if isinstance(arguments, dict):
+            entry["arguments"] = {
+                key: value for key, value in arguments.items()
+                if isinstance(value, (str, int, bool)) or value is None
+            }
+        if code:
+            entry["code"] = code
+        with open(library / "_audit.log", "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+
+
 def _tool_definitions() -> list[dict[str, Any]]:
     return [
         {
@@ -42,19 +64,97 @@ def _tool_definitions() -> list[dict[str, Any]]:
             },
         },
         {
-            "name": "activate_skill",
-            "description": "Activate a skill by its exact ID for a named agent. Does not install capabilities.",
+            "name": "load_skill",
+            "description": "Read exactly one skill's SKILL.md by exact ID. Optional revision must match the current content hash.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "capability_id": {"type": "string", "description": "Exact skill ID."},
-                    "agent": {"type": "string", "description": "Target agent name."},
+                    "capability_id": {"type": "string"},
+                    "revision": {"type": "string", "description": "Expected content revision from get_capability."},
+                },
+                "required": ["capability_id"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "get_tool_schema",
+            "description": "Get the stored input schema for one indexed MCP tool, when a probe captured one.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"capability_id": {"type": "string"}},
+                "required": ["capability_id"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "prepare_activation",
+            "description": "Dry-run plan for activating a skill: targets, conflicts, trust findings, approval need.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "capability_id": {"type": "string"},
+                    "agent": {"type": "string"},
+                    "revision": {"type": "string", "description": "Fail with STALE_REVISION when outdated."},
                 },
                 "required": ["capability_id", "agent"],
                 "additionalProperties": False,
             },
         },
+        {
+            "name": "activate_skill",
+            "description": "Activate a skill by its exact ID for a named agent. Applies an approved plan; unreviewed skills need confirm_untrusted.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "capability_id": {"type": "string", "description": "Exact skill ID."},
+                    "agent": {"type": "string", "description": "Target agent name."},
+                    "confirm_untrusted": {"type": "boolean", "default": False,
+                                           "description": "Explicit approval for needs_review/unscanned skills."},
+                },
+                "required": ["capability_id", "agent"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "deactivate_skill",
+            "description": "Remove one managed skill activation. Never touches the canonical source.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "capability_id": {"type": "string"},
+                    "agent": {"type": "string"},
+                },
+                "required": ["capability_id", "agent"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "refresh_catalog",
+            "description": "Explicitly rebuild the capability index from disk.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "probe_tools": {"type": "boolean", "default": False,
+                                    "description": "Probe local command MCP servers for tool names and schemas."},
+                },
+                "additionalProperties": False,
+            },
+        },
     ]
+
+
+def _require_id(arguments: Any) -> str:
+    capability_id = arguments.get("capability_id")
+    if not isinstance(capability_id, str) or not capability_id:
+        raise ValueError("capability_id must be a non-empty string")
+    return capability_id
+
+
+def _require_agent(arguments: Any) -> str:
+    agent = arguments.get("agent")
+    if not isinstance(agent, str) or not agent.strip():
+        raise ValueError("agent must be a non-empty string")
+    return agent.strip()
 
 
 def _call_tool(name: str, arguments: Any) -> Any:
@@ -86,29 +186,90 @@ def _call_tool(name: str, arguments: Any) -> Any:
         )
 
     if name == "get_capability":
-        capability_id = arguments.get("capability_id")
-        if not isinstance(capability_id, str) or not capability_id:
-            raise ValueError("capability_id must be a non-empty string")
-        result = capability_finder.show(capability_id)
+        result = capability_finder.show(_require_id(arguments))
         if result is None:
-            raise ValueError(f"Unknown capability ID: {capability_id}")
+            raise capability_finder.CapError("NOT_FOUND", f"Unknown capability ID: {arguments.get('capability_id')}")
         return result
 
+    if name == "load_skill":
+        revision = arguments.get("revision")
+        if revision is not None and not isinstance(revision, str):
+            raise ValueError("revision must be a string")
+        return capability_finder.load_skill(_require_id(arguments), revision)
+
+    if name == "get_tool_schema":
+        result = capability_finder.show(_require_id(arguments))
+        if result is None or result.get("type") != "tool":
+            raise capability_finder.CapError("NOT_FOUND", "not an indexed MCP tool")
+        if not str(result.get("category", "")).startswith("mcp-tool/") or not result.get("input_schema"):
+            return {"id": result["id"], "server": (result.get("aliases") or [None])[0],
+                    "tool": result["name"], "description": result.get("description"),
+                    "schema": None,
+                    "note": "no stored schema; run refresh with probe_tools for local command servers"}
+        return {"id": result["id"], "server": (result.get("aliases") or [None])[0],
+                "tool": result["name"], "description": result.get("description"),
+                "schema": result["input_schema"]}
+
+    if name == "prepare_activation":
+        capability_id = _require_id(arguments)
+        agent = _require_agent(arguments)
+        revision = arguments.get("revision")
+        if revision is not None and not isinstance(revision, str):
+            raise ValueError("revision must be a string")
+        plan = capability_finder.preview_activation(capability_id, agent)
+        if revision is not None and revision != plan.get("revision"):
+            raise capability_finder.CapError("STALE_REVISION",
+                                             f"skill {plan['id']} changed since revision {revision}")
+        trust = plan.get("trust_status", "unscanned")
+        findings = []
+        if plan["status"] == "conflict":
+            findings.append({"level": "error", "code": "CONFLICT", "detail": plan["conflict"]})
+        if trust == "blocked":
+            findings.append({"level": "block", "code": "UNTRUSTED",
+                             "detail": "skill is blocked by policy and cannot be activated"})
+        elif trust in ("needs_review", "unscanned"):
+            findings.append({"level": "warn", "code": "UNTRUSTED",
+                             "detail": f"trust={trust}: re-run activate_skill with confirm_untrusted=true"})
+        return {"plan": plan, "findings": findings,
+                "approval_required": trust in ("needs_review", "unscanned", "blocked")}
+
     if name == "activate_skill":
-        capability_id = arguments.get("capability_id")
-        agent = arguments.get("agent")
-        if not isinstance(capability_id, str) or not capability_id:
-            raise ValueError("capability_id must be a non-empty string")
-        if not isinstance(agent, str) or not agent.strip():
-            raise ValueError("agent must be a non-empty string")
-        result = capability_finder.activate(capability_id, agent.strip())
+        confirm = arguments.get("confirm_untrusted", False)
+        if not isinstance(confirm, bool):
+            raise ValueError("confirm_untrusted must be a boolean")
+        result = capability_finder.activate(_require_id(arguments), _require_agent(arguments),
+                                            confirm=confirm)
         if not isinstance(result, dict):
             raise RuntimeError("Capability finder returned an invalid activation result")
         return result
 
+    if name == "deactivate_skill":
+        return capability_finder.deactivate_skill(_require_id(arguments), _require_agent(arguments))
+
+    if name == "refresh_catalog":
+        probe = arguments.get("probe_tools", False)
+        if not isinstance(probe, bool):
+            raise ValueError("probe_tools must be a boolean")
+        data = capability_finder.refresh_index(probe)
+        _, library = capability_finder._paths(None, None)
+        return {"indexed": len(data["capabilities"]), "path": str(library / "capabilities_index.json")}
+
     raise LookupError(f"Unknown tool: {name}")
 
 
+def _error_code(exc: Exception) -> str | None:
+    code = getattr(exc, "code", None)
+    if isinstance(code, str):
+        return code
+    if isinstance(exc, FileExistsError):
+        return "CONFLICT"
+    if isinstance(exc, FileNotFoundError):
+        return "NOT_FOUND"
+    if isinstance(exc, PermissionError):
+        return "PERMISSION_DENIED"
+    if isinstance(exc, OSError):
+        return "EXECUTION_FAILED"
+    return None
 def _response(request_id: Any, result: Any = None, error: dict[str, Any] | None = None) -> dict[str, Any]:
     response: dict[str, Any] = {"jsonrpc": "2.0", "id": request_id}
     if error is not None:
@@ -214,15 +375,24 @@ def _dispatch(message: Any) -> dict[str, Any] | None:
         name = params.get("name")
         if not isinstance(name, str):
             return _response(request_id, error={"code": -32602, "message": "Tool name is required"})
+        tool_arguments = params.get("arguments", {})
         try:
-            result = _call_tool(name, params.get("arguments", {}))
+            result = _call_tool(name, tool_arguments)
+            _audit(name, tool_arguments, "ok")
             content = {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}]}
             return _response(request_id, _modern_result(content) if modern else content)
         except LookupError as exc:
+            _audit(name, tool_arguments, "error")
             return _response(request_id, error={"code": -32602, "message": str(exc)})
-        except ValueError as exc:
-            return _response(request_id, error={"code": -32602, "message": str(exc)})
+        except (ValueError, OSError) as exc:
+            code = _error_code(exc)
+            _audit(name, tool_arguments, "error", code)
+            error: dict[str, Any] = {"code": -32602, "message": str(exc)}
+            if code is not None:
+                error["data"] = {"code": code}
+            return _response(request_id, error=error)
         except Exception as exc:  # surface backend failures as tool errors, not transport crashes
+            _audit(name, tool_arguments, "error", "EXECUTION_FAILED")
             content = {"content": [{"type": "text", "text": str(exc)}], "isError": True}
             return _response(request_id, _modern_result(content) if modern else content)
     return _response(request_id, error={"code": -32601, "message": f"Method not found: {method}"})

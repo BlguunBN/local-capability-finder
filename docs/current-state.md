@@ -1,15 +1,33 @@
-# Current state (P0 baseline, 2026-10-09)
+# Current state (P0 baseline, 2026-10-09; P1–P4 landed below)
 
 Branch: `capfind/plan-implementation`. All measurements on an isolated
 synthetic fixture unless noted. No user skill files were touched.
+
+## P4 changes (2026-10-10)
+
+- MCP surface is now 8 tools: added `load_skill` (exact-ID SKILL.md with
+  revision check), `get_tool_schema` (stored probed schemas, honest
+  descriptor otherwise), `prepare_activation` (dry-run + findings +
+  `approval_required`), `deactivate_skill`, `refresh_catalog`.
+- Contract errors as `data.code` (`NOT_FOUND`, `CONFLICT`, `UNTRUSTED`,
+  `UNSUPPORTED_AGENT`, `STALE_REVISION`, `PERMISSION_DENIED`,
+  `ROLLBACK_FAILED`, `EXECUTION_FAILED`); every call audited to
+  `_audit.log` without credentials.
+- Trust-gated activation: `blocked` always refused; `needs_review` /
+  `unscanned` require MCP `confirm_untrusted` or CLI `--yes`.
+- `docs/integration-contract.md` publishes Contract v1 for the companion
+  Stack. Verified end-to-end over stdio: search → get → load serves one
+  SKILL.md without loading anything else.
 
 ## Public entrypoints
 
 - CLI: `capability_finder.py {refresh,search,show,activate}`,
   `library_catalog.py`, `skill_archive.py`, `install_agents.py`,
   `capfind auto {enable,status,disable,test}` (node `bin/capfind.js`).
-- MCP tools: `search_capabilities(query, kind, limit, agent, project_hint)`,
-  `get_capability(capability_id)`, `activate_skill(capability_id, agent)`.
+- MCP tools: `search_capabilities`, `get_capability`, `load_skill`,
+  `get_tool_schema`, `prepare_activation`, `activate_skill`,
+  `deactivate_skill`, `refresh_catalog` (Contract v1, see
+  `docs/integration-contract.md`).
 - npm package `local-capability-finder-cli` ships the 9 `.py` files above.
 
 ## Measured baseline
@@ -22,6 +40,22 @@ synthetic fixture unless noted. No user skill files were touched.
   `server/discover` on `2026-07-28`; wire output ASCII-escaped.
 - Live user index on this machine reports **stale** (source files moved
   since last refresh) instead of serving silently outdated results.
+
+## P4 changes (2026-10-10, branch `capfind/plan-implementation`)
+
+- MCP surface is now 8 tools: added `load_skill` (exact-ID SKILL.md with
+  revision check), `get_tool_schema` (stored probed schemas, honest
+  descriptor otherwise), `prepare_activation` (dry-run + findings +
+  `approval_required`), `deactivate_skill`, `refresh_catalog`.
+- Contract errors as `data.code` (`NOT_FOUND`, `CONFLICT`, `UNTRUSTED`,
+  `UNSUPPORTED_AGENT`, `STALE_REVISION`, `PERMISSION_DENIED`,
+  `ROLLBACK_FAILED`, `EXECUTION_FAILED`); every call audited to
+  `_audit.log` without credentials.
+- Trust-gated activation: `blocked` always refused; `needs_review` /
+  `unscanned` require MCP `confirm_untrusted` or CLI `--yes`.
+- `docs/integration-contract.md` publishes Contract v1 for the companion
+  Stack. Verified end-to-end over stdio: search → get → load serves one
+  SKILL.md without loading anything else.
 
 ## P3 changes (2026-10-10, branch `capfind/plan-implementation`)
 

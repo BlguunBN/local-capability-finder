@@ -35,7 +35,7 @@ class MCPProtocolTests(unittest.TestCase):
     def test_modern_tools_work_without_initialize(self):
         listed = capability_mcp._dispatch(request("tools/list", {"_meta": MODERN_META}))
         self.assertEqual("complete", listed["result"]["resultType"])
-        self.assertEqual(3, len(listed["result"]["tools"]))
+        self.assertEqual(8, len(listed["result"]["tools"]))
         self.assertEqual("public", listed["result"]["cacheScope"])
         self.assertGreaterEqual(listed["result"]["ttlMs"], 0)
         self.assertIn("io.modelcontextprotocol/serverInfo", listed["result"]["_meta"])
@@ -79,7 +79,7 @@ class MCPProtocolTests(unittest.TestCase):
         self.assertEqual("2025-11-25", initialized["result"]["protocolVersion"])
         listed = capability_mcp._dispatch(request("tools/list", {"_meta": {"progressToken": "x"}}))
         self.assertNotIn("resultType", listed["result"])
-        self.assertEqual(3, len(listed["result"]["tools"]))
+        self.assertEqual(8, len(listed["result"]["tools"]))
 
     def test_modern_stdio_wire_without_initialize(self):
         server = Path(capability_mcp.__file__)
@@ -92,7 +92,7 @@ class MCPProtocolTests(unittest.TestCase):
         responses = [json.loads(line) for line in process.stdout.splitlines()]
         self.assertEqual(2, len(responses))
         self.assertEqual(["2026-07-28"], responses[0]["result"]["supportedVersions"])
-        self.assertEqual(3, len(responses[1]["result"]["tools"]))
+        self.assertEqual(8, len(responses[1]["result"]["tools"]))
         self.assertEqual("", process.stderr)
 
 

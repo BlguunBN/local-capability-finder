@@ -46,6 +46,17 @@ AGENT_DIRS = {
     "trae": ".trae/skills", "continue": ".continue/skills",
     "aider-desk": ".aider-desk/skills",
 }
+class CapError(ValueError):
+    """Structured contract error: ValueError-compatible message plus a stable code."""
+    CODES = ("NOT_FOUND", "AMBIGUOUS_ID", "UNTRUSTED", "UNSUPPORTED_AGENT",
+             "CONFLICT", "INVALID_PATH", "STALE_REVISION", "PERMISSION_DENIED",
+             "ROLLBACK_FAILED", "EXECUTION_FAILED")
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+
+
 TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
 STOPWORDS = {"a", "an", "the", "for", "with", "to", "of", "in", "on", "my", "i", "need", "find", "use", "skill", "skills", "tool", "tools", "plugin", "plugins", "no", "match", "make", "create", "build", "write", "fix", "search"}
 
@@ -443,8 +454,10 @@ def _tool_entries(home: Path, library: Path, probe_tools: bool) -> list[dict]:
                     if not tool_name:
                         continue
                     tool_key = f"{key}:{tool_name.casefold()}"
+                    schema = tool.get("inputSchema")
                     grouped[tool_key] = {"id": _id("tool", tool_key), "type": "tool",
                                          "name": tool_name, "description": _short(tool.get("description", ""), 300),
+                                         "input_schema": schema if isinstance(schema, dict) else None,
                                          "category": f"mcp-tool/{name}", "source_path": str(path),
                                          "variants": [{"store": "catalog", "path": str(path), "server": str(name)}],
                                          "availability": item["availability"], "aliases": [str(name)],
@@ -694,7 +707,7 @@ def search(query: str, kind: str | None = None, limit: int = 3, home: Path | Non
     if not 1 <= limit <= 20:
         raise ValueError("limit must be 1..20")
     if agent is not None and agent not in AGENT_DIRS:
-        raise ValueError(f"unknown agent: {agent}")
+        raise CapError("UNSUPPORTED_AGENT", f"unknown agent: {agent}")
     terms = list(dict.fromkeys(_tokens(query)))
     if not terms:
         return []
@@ -885,9 +898,9 @@ def preview_activation(capability_id: str, agent: str, home: Path | None = None,
     home, library = _paths(home, library)
     item = show(capability_id, home, library)
     if item is None or item["type"] != "skill":
-        raise ValueError("activate requires an exact skill ID from search")
+        raise CapError("NOT_FOUND", "activate requires an exact skill ID from search")
     if agent not in AGENT_DIRS:
-        raise ValueError(f"unknown agent: {agent}")
+        raise CapError("UNSUPPORTED_AGENT", f"unknown agent: {agent}")
     variants = item["variants"]
     chosen = next((v for v in variants if v["store"] == agent), variants[0])
     src = Path(chosen["path"])
@@ -895,6 +908,7 @@ def preview_activation(capability_id: str, agent: str, home: Path | None = None,
     target = home / AGENT_DIRS[agent] / name
     plan = {"id": item["id"], "requested_id": capability_id, "agent": agent, "name": name,
             "revision": item.get("content_hash"),
+            "trust_status": item.get("trust_status", "unscanned"),
             "source": str(src), "target": str(target),
             "method": "symlink" if os.name != "nt" else "symlink, junction fallback",
             "manifest": str(_activation_manifest_path(library, agent, name)),
@@ -924,9 +938,17 @@ def _junction_fallback(target_root: Path, name: str, src: Path, target: Path) ->
         raise OSError(result.stderr.strip() or "junction creation failed")
 
 
-def activate(capability_id: str, agent: str, home: Path | None = None, library: Path | None = None) -> dict:
+def activate(capability_id: str, agent: str, home: Path | None = None, library: Path | None = None,
+         confirm: bool = False) -> dict:
     home, library = _paths(home, library)
     plan = preview_activation(capability_id, agent, home, library)
+    trust = plan.get("trust_status", "unscanned")
+    if trust == "blocked":
+        raise CapError("UNTRUSTED", f"skill is blocked by policy: {plan['id']}")
+    if trust in ("needs_review", "unscanned") and not confirm:
+        raise CapError("UNTRUSTED",
+                       f"skill requires review before activation (trust={trust}); "
+                       "re-run with explicit confirmation")
     manifest_path = Path(plan["manifest"])
     if plan["status"] == "conflict":
         if os.path.lexists(plan["target"]):
@@ -983,14 +1005,34 @@ def activate(capability_id: str, agent: str, home: Path | None = None, library: 
     return {"status": "activated", "id": plan["id"], "agent": agent, "path": plan["target"]}
 
 
+def load_skill(capability_id: str, revision: str | None = None,
+             home: Path | None = None, library: Path | None = None) -> dict:
+    """Read exactly one skill's SKILL.md by exact ID. Never executes anything."""
+    home, library = _paths(home, library)
+    item = show(capability_id, home, library)
+    if item is None or item["type"] != "skill":
+        raise CapError("NOT_FOUND", f"unknown skill ID: {capability_id}")
+    current = item.get("content_hash")
+    if revision is not None and revision != current:
+        raise CapError("STALE_REVISION",
+                       f"skill {item['id']} changed since revision {revision}")
+    try:
+        content = Path(item["source_path"]).read_text(encoding="utf-8")
+    except OSError as exc:
+        raise CapError("NOT_FOUND", f"skill source unreadable: {item['source_path']}") from exc
+    return {"id": item["id"], "name": item["name"], "source_path": item["source_path"],
+            "revision": current, "trust_status": item.get("trust_status", "unscanned"),
+            "content": content}
+
+
 def deactivate_skill(capability_id: str, agent: str, home: Path | None = None, library: Path | None = None) -> dict:
     """Remove only a managed activation link. Never touches the source or real directories."""
     home, library = _paths(home, library)
     item = show(capability_id, home, library)
     if item is None or item["type"] != "skill":
-        raise ValueError("deactivate requires an exact skill ID from search")
+        raise CapError("NOT_FOUND", "deactivate requires an exact skill ID from search")
     if agent not in AGENT_DIRS:
-        raise ValueError(f"unknown agent: {agent}")
+        raise CapError("UNSUPPORTED_AGENT", f"unknown agent: {agent}")
     name = _validate_skill_name(item["name"])
     manifest_path = _activation_manifest_path(library, agent, name)
     manifest = _read_json(manifest_path)
@@ -1093,6 +1135,7 @@ def main(argv: list[str] | None = None) -> int:
     action.add_argument("id")
     action.add_argument("--agent", required=True, choices=sorted(AGENT_DIRS))
     action.add_argument("--dry-run", action="store_true", help="print the plan without changing anything")
+    action.add_argument("--yes", action="store_true", help="confirm activation of a skill that needs review")
     deact = sub.add_parser("deactivate")
     deact.add_argument("id")
     deact.add_argument("--agent", required=True, choices=sorted(AGENT_DIRS))
@@ -1119,7 +1162,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.dry_run:
                 print(json.dumps(preview_activation(args.id, args.agent), ensure_ascii=False, indent=2))
             else:
-                print(json.dumps(activate(args.id, args.agent), ensure_ascii=False))
+                print(json.dumps(activate(args.id, args.agent, confirm=args.yes), ensure_ascii=False))
         elif args.command == "deactivate":
             print(json.dumps(deactivate_skill(args.id, args.agent), ensure_ascii=False))
         else:

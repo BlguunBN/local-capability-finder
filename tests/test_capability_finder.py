@@ -344,7 +344,7 @@ class CapabilityFinderTests(unittest.TestCase):
             "disabledServers must hide a server regardless of its definition",
         )
 
-    def test_mcp_advertises_three_tools(self):
+    def test_mcp_advertises_contract_tools(self):
         initialized = capability_mcp._dispatch(
             {
                 "jsonrpc": "2.0",
@@ -358,7 +358,8 @@ class CapabilityFinderTests(unittest.TestCase):
             {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
         )
         self.assertEqual(
-            {"search_capabilities", "get_capability", "activate_skill"},
+            {"search_capabilities", "get_capability", "load_skill", "get_tool_schema",
+             "prepare_activation", "activate_skill", "deactivate_skill", "refresh_catalog"},
             {tool["name"] for tool in response["result"]["tools"]},
         )
         self.assertIsNone(

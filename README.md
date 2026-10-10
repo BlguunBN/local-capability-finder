@@ -42,7 +42,12 @@ Codex, Claude Code, Gemini, and Hermes use their installed CLIs. Cursor,
 Antigravity, OpenCode, and OMP JSON configurations are backed up before an entry is added. Restart
 an agent after installation so it discovers the three MCP tools.
 
-The tools are `search_capabilities`, `get_capability`, and `activate_skill`.
+The tools are `search_capabilities`, `get_capability`, `load_skill`,
+`get_tool_schema`, `prepare_activation`, `activate_skill`,
+`deactivate_skill`, and `refresh_catalog` (Contract v1, documented in
+`docs/integration-contract.md`). Errors carry a stable `data.code`
+(`NOT_FOUND`, `CONFLICT`, `UNTRUSTED`, `UNSUPPORTED_AGENT`,
+`STALE_REVISION`, …), and every call is audit-logged locally.
 The stdio server supports the `2026-07-28` stateless `server/discover` flow and
 the legacy `initialize` handshake through `2025-11-25`.
 
