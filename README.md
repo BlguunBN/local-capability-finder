@@ -182,6 +182,7 @@ python capability_finder.py deactivate skill:EXACT_ID --agent codex
 python capability_finder.py validate skill:EXACT_ID --apply-trust
 python capability_finder.py trust skill:EXACT_ID needs_review --reason "audit note"
 python capability_finder.py doctor
+python capability_finder.py metrics
 ```
 
 `activate --dry-run` prints the plan without changing anything. `deactivate`

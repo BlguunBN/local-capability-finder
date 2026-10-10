@@ -19,6 +19,18 @@ synthetic fixture unless noted. No user skill files were touched.
   Stack. Verified end-to-end over stdio: search → get → load serves one
   SKILL.md without loading anything else.
 
+## P7 changes (2026-10-10)
+
+- Read-only `metrics` snapshot (CLI + `collect_metrics`): capability counts
+  by kind, index/catalog bytes, warm search p50/p95 over 8 representative
+  queries, max result bytes, MCP handshake cost, lockfile and doctor
+  rollups. No token claims — bytes only, estimates labeled as estimates.
+- Live 5,811-record snapshot: search p50 ~103ms / p95 ~233ms, max result
+  1,233 bytes, handshake ~0ms, 8 tools, doctor clean.
+- Notable: while P4–P5 code was being written, a concurrent agent used the
+  registered Finder to activate 2 skills for codex; manifests + lockfile
+  were written correctly and doctor stayed clean.
+
 ## P6 changes (2026-10-10)
 
 - `validate <id>` lints metadata/paths/references and runs heuristic

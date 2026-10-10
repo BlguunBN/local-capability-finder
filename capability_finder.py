@@ -1294,6 +1294,88 @@ def validate_skill(capability_id: str, home: Path | None = None, library: Path |
             "revision": item.get("content_hash"), "scanner": scanner,
             "findings": findings}
 
+METRIC_QUERIES = (
+    "debug production crash",
+    "deploy cloud workers",
+    "validate pdf forms",
+    "kubernetes manifests",
+    "browser automation",
+    "review pull request",
+    "postgres slow query",
+    "threat model stride",
+)
+
+
+def collect_metrics(home: Path | None = None, library: Path | None = None) -> dict:
+    """Read-only telemetry snapshot: sizes, search latency, handshake cost."""
+    import statistics
+
+    home, library = _paths(home, library)
+    metrics: dict = {"errors": []}
+    try:
+        payload = _load(home, library)
+    except (FileNotFoundError, ValueError) as exc:
+        return {"errors": [str(exc)]}
+    capabilities = payload.get("capabilities", [])
+    by_type: dict[str, int] = {}
+    for item in capabilities:
+        by_type[str(item.get("type"))] = by_type.get(str(item.get("type")), 0) + 1
+    index_path = library / "capabilities_index.json"
+    catalog_path = library / "skills_index.json"
+    metrics["catalog"] = {
+        "capabilities": len(capabilities),
+        "by_type": by_type,
+        "index_bytes": index_path.stat().st_size if index_path.is_file() else None,
+        "skills_catalog_bytes": catalog_path.stat().st_size if catalog_path.is_file() else None,
+    }
+    latencies = []
+    max_bytes = 0
+    for query in METRIC_QUERIES:
+        start = time.perf_counter()
+        try:
+            rows = search(query, limit=3, home=home, library=library)
+        except (OSError, ValueError) as exc:
+            metrics["errors"].append(f"search {query!r}: {exc}")
+            continue
+        latencies.append((time.perf_counter() - start) * 1000)
+        max_bytes = max(max_bytes, len(json.dumps(rows, ensure_ascii=False).encode("utf-8")))
+    if latencies:
+        metrics["search"] = {
+            "queries": len(latencies),
+            "p50_ms": round(statistics.median(latencies), 1),
+            "p95_ms": round(sorted(latencies)[min(len(latencies) - 1, int(len(latencies) * 0.95))], 1),
+            "max_result_bytes": max_bytes,
+        }
+    else:
+        metrics["search"] = {"queries": 0}
+    try:
+        import capability_mcp as mcp
+
+        start = time.perf_counter()
+        initialized = mcp._dispatch({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                                     "params": {"protocolVersion": "2025-11-25"}})
+        listed = mcp._dispatch({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+        metrics["mcp"] = {
+            "handshake_ms": round((time.perf_counter() - start) * 1000, 1),
+            "protocol": initialized.get("result", {}).get("protocolVersion"),
+            "tools": len(listed.get("result", {}).get("tools", [])),
+        }
+    except (OSError, ValueError) as exc:
+        metrics["errors"].append(f"mcp: {exc}")
+    lock = _read_lock(library)
+    activations: dict[str, int] = {}
+    for entry in lock.get("entries", []):
+        if isinstance(entry, dict):
+            key = str(entry.get("agent", "?")) + ":" + str(entry.get("method", "?"))
+            activations[key] = activations.get(key, 0) + 1
+    metrics["activations"] = {"locked": len(lock.get("entries", [])), "by_agent_method": activations}
+    findings = doctor(home, library)
+    metrics["doctor"] = {"findings": len(findings),
+                         "errors": sum(1 for f in findings if f.get("level") == "error")}
+    metrics["note"] = ("sizes are bytes; token figures elsewhere divide chars by 4 "
+                       "and are estimates, not tokenizer measurements")
+    return metrics
+
 def doctor(home: Path | None = None, library: Path | None = None) -> list[dict]:
     """Inspect index health, skill links, and activation/archive manifests."""
     home, library = _paths(home, library)
@@ -1403,6 +1485,8 @@ def main(argv: list[str] | None = None) -> int:
     trust_cmd.add_argument("--reason", default="")
     doc = sub.add_parser("doctor")
     doc.add_argument("--json", action="store_true")
+    metrics_cmd = sub.add_parser("metrics")
+    metrics_cmd.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
     try:
         if args.command == "refresh":
@@ -1434,6 +1518,23 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "trust":
             print(json.dumps(set_trust_override(args.id, args.status, args.reason),
                              ensure_ascii=False))
+        elif args.command == "metrics":
+            metrics = collect_metrics()
+            if args.json:
+                print(json.dumps(metrics, ensure_ascii=False, indent=2))
+            else:
+                print(f"capabilities: {metrics.get('catalog', {}).get('capabilities')} "
+                      f"{metrics.get('catalog', {}).get('by_type')}")
+                print(f"search p50/p95 ms: {metrics.get('search', {}).get('p50_ms')}/"
+                      f"{metrics.get('search', {}).get('p95_ms')} "
+                      f"max result bytes: {metrics.get('search', {}).get('max_result_bytes')}")
+                print(f"mcp handshake ms: {metrics.get('mcp', {}).get('handshake_ms')} "
+                      f"tools: {metrics.get('mcp', {}).get('tools')}")
+                print(f"activations locked: {metrics.get('activations', {}).get('locked')} "
+                      f"doctor findings: {metrics.get('doctor', {}).get('findings')}")
+                for error in metrics.get("errors", []):
+                    print(f"error: {error}")
+            return 0
         else:
             findings = doctor()
             if args.json:
