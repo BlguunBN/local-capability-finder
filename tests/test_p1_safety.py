@@ -92,6 +92,16 @@ class ActivationTransactionTests(unittest.TestCase):
         self.assertTrue((source / "SKILL.md").is_file())
         self.assertEqual([], finder.doctor(home=self.home, library=self.library))
 
+    @unittest.skipIf(os.name == "nt", "POSIX directory symlink removal semantics")
+    def test_directory_symlink_deactivation_unlinks_link_not_target_directory(self):
+        source = self.home / "source"
+        source.mkdir()
+        target = self.home / "link"
+        target.symlink_to(source, target_is_directory=True)
+        finder._remove_managed_link(target, "directory_symlink")
+        self.assertFalse(os.path.lexists(target))
+        self.assertTrue(source.is_dir())
+
     def test_failed_activate_leaves_recovery_manifest(self):
         with (
             mock.patch.object(

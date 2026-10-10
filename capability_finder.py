@@ -898,7 +898,7 @@ def _tree_hash(path: Path) -> str | None:
 
 
 def _remove_managed_link(path: Path, kind: str) -> None:
-    if kind in ("junction", "directory_symlink"):
+    if kind == "junction":
         os.rmdir(path)
     else:
         path.unlink()
