@@ -177,6 +177,7 @@ python capability_finder.py search "deploy Cloudflare Workers" --kind skill --ag
 python capability_finder.py show skill:EXACT_ID
 python capability_finder.py activate skill:EXACT_ID --agent codex --dry-run
 python capability_finder.py activate skill:EXACT_ID --agent codex
+python capability_finder.py activate skill:EXACT_ID --agent codex --copy
 python capability_finder.py deactivate skill:EXACT_ID --agent codex
 python capability_finder.py doctor
 ```

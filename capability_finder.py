@@ -861,6 +861,27 @@ def _points_at(link: Path, src: Path) -> bool:
         return False
 
 
+def _tree_hash(path: Path) -> str | None:
+    try:
+        digest = hashlib.sha256()
+        items = sorted(path.rglob("*"), key=lambda p: p.relative_to(path).as_posix().casefold())
+        for item in items:
+            rel = item.relative_to(path).as_posix()
+            digest.update(rel.encode("utf-8", "surrogatepass") + b"\0")
+            if _is_junction(item) or item.is_symlink():
+                digest.update(b"L\0" + os.readlink(item).encode("utf-8", "surrogatepass"))
+            elif item.is_file():
+                digest.update(b"F\0")
+                with open(item, "rb") as handle:
+                    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                        digest.update(chunk)
+            else:
+                digest.update(b"D\0")
+        return "sha256:" + digest.hexdigest()
+    except OSError:
+        return None
+
+
 def _remove_managed_link(path: Path, kind: str) -> None:
     if kind in ("junction", "directory_symlink"):
         os.rmdir(path)
@@ -878,11 +899,15 @@ def _write_activation_manifest(path: Path, manifest: dict) -> None:
 def _adopt_activation_manifest(library: Path, manifest_path: Path, plan: dict) -> None:
     if not manifest_path.is_file():
         target = Path(plan["target"])
+        copied = plan.get("method") == "copy"
         _write_activation_manifest(manifest_path, {
             "format": 1, "status": "applied", "stage": "adopted",
             "id": plan["id"], "agent": plan["agent"], "name": plan["name"],
             "source": plan["source"], "target": plan["target"],
-            "link_kind": _managed_link_kind(target), "created_at_epoch": time.time(),
+            "method": "copy" if copied else "link",
+            "source_tree": _tree_hash(target) if copied else None,
+            "link_kind": "copy" if copied else _managed_link_kind(target),
+            "created_at_epoch": time.time(),
         })
     lock = _read_lock(library)
     if not any(isinstance(e, dict) and e.get("id") == plan["id"]
@@ -893,8 +918,11 @@ def _adopt_activation_manifest(library: Path, manifest_path: Path, plan: dict) -
                                "installed_at_epoch": time.time()})
 
 
-def preview_activation(capability_id: str, agent: str, home: Path | None = None, library: Path | None = None) -> dict:
+def preview_activation(capability_id: str, agent: str, home: Path | None = None, library: Path | None = None,
+                       method: str = "link") -> dict:
     """Dry-run plan for activate. Makes no filesystem changes."""
+    if method not in ("link", "copy"):
+        raise ValueError("method must be link or copy")
     home, library = _paths(home, library)
     item = show(capability_id, home, library)
     if item is None or item["type"] != "skill":
@@ -910,7 +938,7 @@ def preview_activation(capability_id: str, agent: str, home: Path | None = None,
             "revision": item.get("content_hash"),
             "trust_status": item.get("trust_status", "unscanned"),
             "source": str(src), "target": str(target),
-            "method": "symlink" if os.name != "nt" else "symlink, junction fallback",
+            "method": "copy" if method == "copy" else ("symlink" if os.name != "nt" else "symlink, junction fallback"),
             "manifest": str(_activation_manifest_path(library, agent, name)),
             "status": "ready", "conflict": None}
     if not (src / "SKILL.md").is_file():
@@ -918,6 +946,9 @@ def preview_activation(capability_id: str, agent: str, home: Path | None = None,
         plan["conflict"] = f"skill source unavailable: {src}"
     elif os.path.lexists(target):
         if _points_at(target, src):
+            plan["status"] = "already_active"
+        elif (method == "copy" and target.is_dir() and not target.is_symlink()
+                and not _is_junction(target) and _tree_hash(target) == _tree_hash(src)):
             plan["status"] = "already_active"
         else:
             plan["status"] = "conflict"
@@ -939,9 +970,9 @@ def _junction_fallback(target_root: Path, name: str, src: Path, target: Path) ->
 
 
 def activate(capability_id: str, agent: str, home: Path | None = None, library: Path | None = None,
-         confirm: bool = False) -> dict:
+         confirm: bool = False, method: str = "link") -> dict:
     home, library = _paths(home, library)
-    plan = preview_activation(capability_id, agent, home, library)
+    plan = preview_activation(capability_id, agent, home, library, method)
     trust = plan.get("trust_status", "unscanned")
     if trust == "blocked":
         raise CapError("UNTRUSTED", f"skill is blocked by policy: {plan['id']}")
@@ -962,28 +993,38 @@ def activate(capability_id: str, agent: str, home: Path | None = None, library: 
     manifest = {"format": 1, "status": "applying", "stage": "link",
                 "id": plan["id"], "agent": agent, "name": plan["name"],
                 "source": plan["source"], "target": plan["target"],
+                "method": method, "source_tree": None,
                 "link_kind": None, "created_at_epoch": time.time()}
     created = False
     try:
-        try:
-            os.symlink(src, target, target_is_directory=True)
+        if method == "copy":
+            import shutil as _shutil
+            resolved = src.resolve()
+            _shutil.copytree(resolved, target)
             created = True
-        except FileExistsError:
-            if _points_at(target, src):
-                _adopt_activation_manifest(library, manifest_path, plan)
-                return {"status": "already_active", "id": plan["id"], "agent": agent, "path": plan["target"]}
-            raise FileExistsError(f"refusing to overwrite existing skill: {target}")
-        except OSError:
-            if os.name == "nt":
-                _junction_fallback(target.parent, plan["name"], src, target)
+            manifest["source_tree"] = _tree_hash(resolved)
+            if manifest["source_tree"] is None or _tree_hash(target) != manifest["source_tree"]:
+                raise OSError(f"activation verify failed: {target}")
+        else:
+            try:
+                os.symlink(src, target, target_is_directory=True)
                 created = True
-            else:
-                raise
-        if created and not _points_at(target, src):
-            raise OSError(f"activation verify failed: {target}")
+            except FileExistsError:
+                if _points_at(target, src):
+                    _adopt_activation_manifest(library, manifest_path, plan)
+                    return {"status": "already_active", "id": plan["id"], "agent": agent, "path": plan["target"]}
+                raise FileExistsError(f"refusing to overwrite existing skill: {target}")
+            except OSError:
+                if os.name == "nt":
+                    _junction_fallback(target.parent, plan["name"], src, target)
+                    created = True
+                else:
+                    raise
+            if created and not _points_at(target, src):
+                raise OSError(f"activation verify failed: {target}")
         manifest["status"] = "applied"
         manifest["stage"] = "verified"
-        manifest["link_kind"] = _managed_link_kind(target)
+        manifest["link_kind"] = "copy" if method == "copy" else _managed_link_kind(target)
         _write_activation_manifest(manifest_path, manifest)
         _upsert_lock(library, {"id": plan["id"], "revision": plan.get("revision"),
                                "agent": agent, "path": plan["target"],
@@ -993,9 +1034,13 @@ def activate(capability_id: str, agent: str, home: Path | None = None, library: 
         manifest["status"] = "failed"
         manifest["error"] = str(exc)
         manifest["rolled_back"] = False
-        if created and os.path.lexists(target) and _points_at(target, src):
+        if created and os.path.lexists(target) and (method == "copy" or _points_at(target, src)):
             try:
-                _remove_managed_link(target, _managed_link_kind(target))
+                if method == "copy" and _managed_link_kind(target) == "directory":
+                    import shutil as _shutil
+                    _shutil.rmtree(target)
+                else:
+                    _remove_managed_link(target, _managed_link_kind(target))
                 manifest["rolled_back"] = True
             except OSError as rollback_exc:
                 manifest["rollback_error"] = str(rollback_exc)
@@ -1047,15 +1092,23 @@ def deactivate_skill(capability_id: str, agent: str, home: Path | None = None, l
     if not isinstance(manifest, dict) or manifest.get("status") not in ("applied", "failed"):
         raise FileExistsError(f"refusing to remove unmanaged skill: {target}")
     kind = _managed_link_kind(target)
-    if kind == "directory":
-        raise FileExistsError(f"refusing to remove unmanaged directory: {target}")
-    recorded = manifest.get("source")
-    if recorded and _points_at(target, Path(recorded)):
-        _remove_managed_link(target, kind)
-    elif manifest.get("status") == "failed":
-        _remove_managed_link(target, kind)
+    if manifest.get("method") == "copy" or manifest.get("link_kind") == "copy":
+        if kind != "directory":
+            raise FileExistsError(f"activation drift: {target} is no longer the managed copy")
+        if _tree_hash(target) != manifest.get("source_tree"):
+            raise FileExistsError(f"activation drift: managed copy changed: {target}")
+        import shutil as _shutil
+        _shutil.rmtree(target)
     else:
-        raise FileExistsError(f"activation drift: {target} no longer points at the recorded source")
+        if kind == "directory":
+            raise FileExistsError(f"refusing to remove unmanaged directory: {target}")
+        recorded = manifest.get("source")
+        if recorded and _points_at(target, Path(recorded)):
+            _remove_managed_link(target, kind)
+        elif manifest.get("status") == "failed":
+            _remove_managed_link(target, kind)
+        else:
+            raise FileExistsError(f"activation drift: {target} no longer points at the recorded source")
     manifest_path.unlink(missing_ok=True)
     _remove_lock(library, (item["id"], *item.get("legacy_ids", [])), agent)
     refresh_index(home=home, library=library)
@@ -1096,7 +1149,11 @@ def doctor(home: Path | None = None, library: Path | None = None) -> list[dict]:
                                  "detail": f"{data.get('id')} for {data.get('agent')}: {data.get('error')}; rolled_back={data.get('rolled_back')}; manifest: {entry}"})
             elif data.get("status") == "applied":
                 recorded = data.get("source", "")
-                if not os.path.lexists(target) or (recorded and not _points_at(target, Path(recorded))):
+                if data.get("method") == "copy" or data.get("link_kind") == "copy":
+                    if not target.is_dir() or _tree_hash(target) != data.get("source_tree"):
+                        findings.append({"level": "warning", "code": "ACTIVATION_DRIFT",
+                                         "detail": f"{data.get('id')} for {data.get('agent')}: managed copy missing or changed: {target}"})
+                elif not os.path.lexists(target) or (recorded and not _points_at(target, Path(recorded))):
                     findings.append({"level": "warning", "code": "ACTIVATION_DRIFT",
                                      "detail": f"{data.get('id')} for {data.get('agent')}: target missing or moved: {target}"})
     archive = library / "on-demand"
@@ -1136,6 +1193,7 @@ def main(argv: list[str] | None = None) -> int:
     action.add_argument("--agent", required=True, choices=sorted(AGENT_DIRS))
     action.add_argument("--dry-run", action="store_true", help="print the plan without changing anything")
     action.add_argument("--yes", action="store_true", help="confirm activation of a skill that needs review")
+    action.add_argument("--copy", action="store_true", help="copy the skill instead of linking it")
     deact = sub.add_parser("deactivate")
     deact.add_argument("id")
     deact.add_argument("--agent", required=True, choices=sorted(AGENT_DIRS))
@@ -1162,7 +1220,8 @@ def main(argv: list[str] | None = None) -> int:
             if args.dry_run:
                 print(json.dumps(preview_activation(args.id, args.agent), ensure_ascii=False, indent=2))
             else:
-                print(json.dumps(activate(args.id, args.agent, confirm=args.yes), ensure_ascii=False))
+                print(json.dumps(activate(args.id, args.agent, confirm=args.yes,
+                                        method="copy" if args.copy else "link"), ensure_ascii=False))
         elif args.command == "deactivate":
             print(json.dumps(deactivate_skill(args.id, args.agent), ensure_ascii=False))
         else:

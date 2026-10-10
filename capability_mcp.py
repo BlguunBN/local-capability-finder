@@ -95,6 +95,7 @@ def _tool_definitions() -> list[dict[str, Any]]:
                     "capability_id": {"type": "string"},
                     "agent": {"type": "string"},
                     "revision": {"type": "string", "description": "Fail with STALE_REVISION when outdated."},
+                    "method": {"type": "string", "enum": ["link", "copy"], "default": "link"},
                 },
                 "required": ["capability_id", "agent"],
                 "additionalProperties": False,
@@ -110,6 +111,8 @@ def _tool_definitions() -> list[dict[str, Any]]:
                     "agent": {"type": "string", "description": "Target agent name."},
                     "confirm_untrusted": {"type": "boolean", "default": False,
                                            "description": "Explicit approval for needs_review/unscanned skills."},
+                    "method": {"type": "string", "enum": ["link", "copy"], "default": "link",
+                               "description": "Link first; copy only when links are unusable."},
                 },
                 "required": ["capability_id", "agent"],
                 "additionalProperties": False,
@@ -216,7 +219,10 @@ def _call_tool(name: str, arguments: Any) -> Any:
         revision = arguments.get("revision")
         if revision is not None and not isinstance(revision, str):
             raise ValueError("revision must be a string")
-        plan = capability_finder.preview_activation(capability_id, agent)
+        method = arguments.get("method", "link")
+        if method not in ("link", "copy"):
+            raise ValueError("method must be link or copy")
+        plan = capability_finder.preview_activation(capability_id, agent, method=method)
         if revision is not None and revision != plan.get("revision"):
             raise capability_finder.CapError("STALE_REVISION",
                                              f"skill {plan['id']} changed since revision {revision}")
@@ -237,8 +243,11 @@ def _call_tool(name: str, arguments: Any) -> Any:
         confirm = arguments.get("confirm_untrusted", False)
         if not isinstance(confirm, bool):
             raise ValueError("confirm_untrusted must be a boolean")
+        method = arguments.get("method", "link")
+        if method not in ("link", "copy"):
+            raise ValueError("method must be link or copy")
         result = capability_finder.activate(_require_id(arguments), _require_agent(arguments),
-                                            confirm=confirm)
+                                            confirm=confirm, method=method)
         if not isinstance(result, dict):
             raise RuntimeError("Capability finder returned an invalid activation result")
         return result

@@ -19,6 +19,17 @@ synthetic fixture unless noted. No user skill files were touched.
   Stack. Verified end-to-end over stdio: search → get → load serves one
   SKILL.md without loading anything else.
 
+## P5 changes (2026-10-10)
+
+- Link-first activation with hash-verified `--copy` fallback
+  (`method: link|copy` on CLI/MCP, recorded in manifest + lockfile).
+  Modified copies are never deleted; doctor reports copy drift.
+- `docs/agent-compatibility.md` records honest per-host status
+  (registration verified; live load untested except via this session).
+- Live proof: `aes:skill:systematic-debugging-suite` dry-run → activate →
+  verify → deactivate → zero residue → doctor clean on `trae`;
+  overwrite-refusal proven on `opencode` (pre-existing native copy kept).
+
 ## Public entrypoints
 
 - CLI: `capability_finder.py {refresh,search,show,activate}`,
@@ -40,22 +51,6 @@ synthetic fixture unless noted. No user skill files were touched.
   `server/discover` on `2026-07-28`; wire output ASCII-escaped.
 - Live user index on this machine reports **stale** (source files moved
   since last refresh) instead of serving silently outdated results.
-
-## P4 changes (2026-10-10, branch `capfind/plan-implementation`)
-
-- MCP surface is now 8 tools: added `load_skill` (exact-ID SKILL.md with
-  revision check), `get_tool_schema` (stored probed schemas, honest
-  descriptor otherwise), `prepare_activation` (dry-run + findings +
-  `approval_required`), `deactivate_skill`, `refresh_catalog`.
-- Contract errors as `data.code` (`NOT_FOUND`, `CONFLICT`, `UNTRUSTED`,
-  `UNSUPPORTED_AGENT`, `STALE_REVISION`, `PERMISSION_DENIED`,
-  `ROLLBACK_FAILED`, `EXECUTION_FAILED`); every call audited to
-  `_audit.log` without credentials.
-- Trust-gated activation: `blocked` always refused; `needs_review` /
-  `unscanned` require MCP `confirm_untrusted` or CLI `--yes`.
-- `docs/integration-contract.md` publishes Contract v1 for the companion
-  Stack. Verified end-to-end over stdio: search → get → load serves one
-  SKILL.md without loading anything else.
 
 ## P3 changes (2026-10-10, branch `capfind/plan-implementation`)
 
