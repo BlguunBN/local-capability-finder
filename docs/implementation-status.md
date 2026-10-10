@@ -1,8 +1,7 @@
 # Implementation status
 
-Phases follow the plan in
-`C:\Users\bilgu\Downloads\LOCAL_CAPABILITY_FINDER_IMPLEMENTATION_PLAN.md`.
-A phase is complete only when its tests pass on this branch.
+Phases follow the repository implementation plan. A phase is complete only
+when its tests pass on this branch.
 
 | Phase | Status | Evidence |
 |---|---|---|
