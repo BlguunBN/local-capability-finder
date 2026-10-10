@@ -271,6 +271,18 @@ class ArchiveSafetyTests(unittest.TestCase):
         archived = self.vault / "skills" / "test-manifest" / "alpha-skill"
         self.assertEqual(self.hashes["alpha-skill"], skill_archive.tree_hash(archived))
 
+    def test_directory_symlink_removal_unlinks_not_target(self):
+        source = Path(self.temp.name) / "link-source"
+        source.mkdir()
+        link = Path(self.temp.name) / "link-alias"
+        try:
+            link.symlink_to(source, target_is_directory=True)
+        except OSError:
+            self.skipTest("symlink creation needs privilege on this host")
+        skill_archive.remove_directory_link(link, "directory_symlink")
+        self.assertFalse(os.path.lexists(link))
+        self.assertTrue(source.is_dir())
+
     def test_unknown_skill_is_rejected(self):
         with self.assertRaises(RuntimeError):
             skill_archive.build_manifest(["no-such-skill"], self.library)

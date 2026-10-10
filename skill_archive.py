@@ -146,7 +146,9 @@ def safe_archive_destination(path: Path, base: Path | None = None) -> bool:
 
 
 def remove_directory_link(path: Path, kind: str) -> None:
-    if kind in ("junction", "directory_symlink"):
+    # Junctions need directory removal; every symlink flavor unlinks on all
+    # platforms (os.rmdir on a POSIX directory symlink raises ENOTDIR).
+    if kind == "junction":
         os.rmdir(path)
     else:
         path.unlink()
