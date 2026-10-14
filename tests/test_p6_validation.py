@@ -4,6 +4,7 @@ import json
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -132,6 +133,23 @@ class ValidationTests(unittest.TestCase):
             )
         with self.assertRaises(finder.CapError):
             finder.validate_skill("skill:missing", home=self.home, library=self.library)
+
+    def test_cleared_override_restores_source_trust(self):
+        with mock.patch.object(finder, "_source_trust", return_value={"agents": "unscanned"}):
+            finder.refresh_index(home=self.home, library=self.library)
+            finder.set_trust_override(
+                self.clean_id, "approved", "temporary", home=self.home, library=self.library
+            )
+            index_path = self.library / "capabilities_index.json"
+            index = json.loads(index_path.read_text(encoding="utf-8"))
+            row = next(item for item in index["capabilities"] if item["id"] == self.clean_id)
+            row.pop("source_trust_status")
+            row["trust_status"] = "approved"  # legacy cached override status
+            index_path.write_text(json.dumps(index), encoding="utf-8")
+            finder.set_trust_override(self.clean_id, "clear", home=self.home, library=self.library)
+            self.assertEqual(
+                "unscanned", finder.show(self.clean_id, home=self.home, library=self.library)["trust_status"]
+            )
 
     def test_doctor_flags_stale_scan_after_edit(self):
         finder.validate_skill(

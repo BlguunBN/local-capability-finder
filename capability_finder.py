@@ -276,7 +276,8 @@ def _assign_canonical_ids(grouped: dict, home: Path, library: Path) -> None:
                                  order.get(s, 50)), s))
         item["source_id"] = origin
         item["schema_version"] = 1
-        item["trust_status"] = trust.get(origin, "unscanned")
+        item["source_trust_status"] = trust.get(origin, "unscanned")
+        item["trust_status"] = item["source_trust_status"]
         try:
             archived = (library / "on-demand") in Path(item["source_path"]).parents
         except (OSError, ValueError):
@@ -817,6 +818,12 @@ def show(capability_id: str, home: Path | None = None, library: Path | None = No
     for item in capabilities:
         if item["id"] == capability_id or capability_id in item.get("legacy_ids", []):
             detail = dict(item)
+            source_status = item.get("source_trust_status")
+            if source_status is None:
+                source_status = _source_trust(library).get(
+                    item.get("source_id"), item.get("trust_status", "unscanned"))
+            detail["trust_status"] = source_status
+            detail.pop("trust_reason", None)
             if item["type"] == "skill":
                 detail["usage"] = f"Read the SKILL.md at {item['source_path']}; activate by exact ID only if this agent requires an active skill folder."
                 detail["alternate_versions"] = [
@@ -913,17 +920,7 @@ def _write_activation_manifest(path: Path, manifest: dict) -> None:
 
 def _adopt_activation_manifest(library: Path, manifest_path: Path, plan: dict) -> None:
     if not manifest_path.is_file():
-        target = Path(plan["target"])
-        copied = plan.get("method") == "copy"
-        _write_activation_manifest(manifest_path, {
-            "format": 1, "status": "applied", "stage": "adopted",
-            "id": plan["id"], "agent": plan["agent"], "name": plan["name"],
-            "source": plan["source"], "target": plan["target"],
-            "method": "copy" if copied else "link",
-            "source_tree": _tree_hash(target) if copied else None,
-            "link_kind": "copy" if copied else _managed_link_kind(target),
-            "created_at_epoch": time.time(),
-        })
+        return
     lock = _read_lock(library)
     if not any(isinstance(e, dict) and e.get("id") == plan["id"]
                and e.get("agent") == plan["agent"] for e in lock["entries"]):
@@ -950,7 +947,7 @@ def preview_activation(capability_id: str, agent: str, home: Path | None = None,
     name = _validate_skill_name(item["name"])
     target = home / AGENT_DIRS[agent] / name
     plan = {"id": item["id"], "requested_id": capability_id, "agent": agent, "name": name,
-            "revision": item.get("content_hash"),
+            "revision": _content_hash(str(src / "SKILL.md")),
             "trust_status": item.get("trust_status", "unscanned"),
             "source": str(src), "target": str(target),
             "method": "copy" if method == "copy" else ("symlink" if os.name != "nt" else "symlink, junction fallback"),
@@ -1015,7 +1012,7 @@ def activate(capability_id: str, agent: str, home: Path | None = None, library: 
         if method == "copy":
             import shutil as _shutil
             resolved = src.resolve()
-            _shutil.copytree(resolved, target)
+            _shutil.copytree(resolved, target, symlinks=True)
             created = True
             manifest["source_tree"] = _tree_hash(resolved)
             if manifest["source_tree"] is None or _tree_hash(target) != manifest["source_tree"]:
@@ -1072,14 +1069,15 @@ def load_skill(capability_id: str, revision: str | None = None,
     item = show(capability_id, home, library)
     if item is None or item["type"] != "skill":
         raise CapError("NOT_FOUND", f"unknown skill ID: {capability_id}")
-    current = item.get("content_hash")
+    try:
+        content_bytes = Path(item["source_path"]).read_bytes()
+    except OSError as exc:
+        raise CapError("NOT_FOUND", f"skill source unreadable: {item['source_path']}") from exc
+    current = "sha256:" + hashlib.sha256(content_bytes).hexdigest()
     if revision is not None and revision != current:
         raise CapError("STALE_REVISION",
                        f"skill {item['id']} changed since revision {revision}")
-    try:
-        content = Path(item["source_path"]).read_text(encoding="utf-8")
-    except OSError as exc:
-        raise CapError("NOT_FOUND", f"skill source unreadable: {item['source_path']}") from exc
+    content = content_bytes.decode("utf-8")
     return {"id": item["id"], "name": item["name"], "source_path": item["source_path"],
             "revision": current, "trust_status": item.get("trust_status", "unscanned"),
             "content": content}
@@ -1423,8 +1421,12 @@ def doctor(home: Path | None = None, library: Path | None = None) -> list[dict]:
                                      "detail": f"{data.get('id')} for {data.get('agent')}: target missing or moved: {target}"})
     try:
         raw_overrides = _trust_overrides_path(library).read_text(encoding="utf-8")
-        corrupt = bool(raw_overrides.strip()) and not isinstance(
-            json.loads(raw_overrides).get("overrides"), dict)
+        if raw_overrides.strip():
+            decoded_overrides = json.loads(raw_overrides)
+            corrupt = (not isinstance(decoded_overrides, dict)
+                       or not isinstance(decoded_overrides.get("overrides"), dict))
+        else:
+            corrupt = False
     except (OSError, ValueError):
         corrupt = "unreadable" if _trust_overrides_path(library).exists() else False
     if corrupt:

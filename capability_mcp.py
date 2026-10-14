@@ -25,13 +25,14 @@ def _audit(tool: str, arguments: Any, status: str, code: str | None = None) -> N
         if isinstance(arguments, dict):
             entry["arguments"] = {
                 key: value for key, value in arguments.items()
-                if isinstance(value, (str, int, bool)) or value is None
+                if key in {"agent", "capability_id", "id", "name"}
+                and (isinstance(value, (str, int, bool)) or value is None)
             }
         if code:
             entry["code"] = code
         with open(library / "_audit.log", "a", encoding="utf-8") as handle:
             handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
-    except OSError:
+    except Exception:
         pass
 
 

@@ -109,6 +109,19 @@ class CopyMethodTests(unittest.TestCase):
         source = self.home / ".agents" / "skills" / "copy-skill"
         self.assertTrue((source / "SKILL.md").is_file())
 
+    def test_copy_preserves_source_symlinks(self):
+        source = self.home / ".agents" / "skills" / "copy-skill"
+        link = source / "linked-ref.md"
+        try:
+            link.symlink_to("ref.md")
+        except OSError as exc:
+            self.skipTest(f"file symlinks unavailable: {exc}")
+        result = finder.activate(
+            self.cap_id, "codex", home=self.home, library=self.library, method="copy"
+        )
+        self.assertEqual("activated", result["status"])
+        self.assertTrue((self.target() / "linked-ref.md").is_symlink())
+
     def test_modified_copy_is_never_deleted(self):
         finder.activate(
             self.cap_id, "codex", home=self.home, library=self.library, method="copy"

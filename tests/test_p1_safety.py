@@ -72,6 +72,18 @@ class ActivationTransactionTests(unittest.TestCase):
         self.assertFalse(os.path.lexists(plan["target"]))
         self.assertFalse((self.library / "_activations").exists())
 
+    def test_existing_unmanaged_target_is_not_adopted_without_manifest(self):
+        target = self.target()
+        target.mkdir(parents=True)
+        source = self.home / ".agents" / "skills" / "alpha-skill"
+        manifest = self.library / "_activations" / "codex__alpha-skill.json"
+        finder._adopt_activation_manifest(self.library, manifest, {
+            "id": self.cap_id, "agent": "codex", "name": "alpha-skill",
+            "source": str(source), "target": str(target), "method": "link",
+        })
+        self.assertFalse(manifest.exists())
+        self.assertFalse((self.library / "activations-lock.json").exists())
+
     def test_activate_writes_manifest_and_deactivate_removes_only_link(self):
         result = finder.activate(
             self.cap_id, "codex", home=self.home, library=self.library
@@ -287,6 +299,90 @@ class ArchiveSafetyTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             skill_archive.build_manifest(["no-such-skill"], self.library)
 
+    def test_custom_library_root_is_used_for_library_store(self):
+        custom = self.base / "custom-lib"
+        skill = custom / "skills" / "custom-skill"
+        make_skill(skill, "custom-skill", "Custom")
+        custom.mkdir(parents=True, exist_ok=True)
+        (custom / "skills_index.json").write_text(json.dumps({"skills": [{
+            "name": "custom-skill", "path": str(skill), "roots": ["library"],
+        }]}), encoding="utf-8")
+        with (mock.patch.object(skill_archive, "_default_library", return_value=self.base / "other-lib"),
+              mock.patch.object(skill_archive, "USER_ROOT", self.base)):
+            manifest = skill_archive.build_manifest(["custom-skill"], custom)
+        self.assertEqual(str(custom / "skills"), manifest["entries"][0]["store_paths"][0]["store_root"])
+
+    def test_catalog_store_aliases_resolve_to_archiver_roots(self):
+        roots = {
+            "pi_agent": self.home / ".pi" / "agent" / "skills",
+            "pi": self.home / ".pi" / "skills",
+            "omp_agent": self.home / ".omp" / "agent" / "skills",
+            "omp_managed": self.home / ".omp" / "managed-skills",
+            "aider_desk": self.home / ".aider-desk" / "skills",
+        }
+        with (mock.patch.object(skill_archive, "ALL_AGENT_ROOTS", roots),
+              mock.patch.object(skill_archive, "USER_ROOT", self.base)):
+            for name, store, resolved_store in (
+                ("pi-current", "pi", "pi_agent"),
+                ("pi-old", "pi-legacy", "pi"),
+                ("omp-current", "omp", "omp_agent"),
+                ("omp-old", "omp-managed", "omp_managed"),
+                ("aider", "aider-desk", "aider_desk"),
+            ):
+                root = roots[resolved_store]
+                folder = root / name
+                make_skill(folder, name, "Alias")
+                (self.library / "skills_index.json").write_text(json.dumps({"skills": [{
+                    "name": name, "path": str(folder), "roots": [store],
+                }]}), encoding="utf-8")
+                manifest = skill_archive.build_manifest([name], self.library)
+                self.assertEqual(resolved_store, manifest["entries"][0]["store_paths"][0]["store"])
+                import shutil
+                shutil.rmtree(folder)
+
+    def test_legacy_vault_restore_persists_to_legacy_manifest(self):
+        manifest = skill_archive.build_manifest(["alpha-skill"], self.library)
+        entry = manifest["entries"][0]
+        legacy_repo = self.base / "repo"
+        legacy = legacy_repo / "on-demand"
+        legacy_manifest = legacy / "pilot-manifest.json"
+        entry["archive_path"] = str(legacy / "skills" / entry["archive_batch"] / entry["name"])
+        manifest["archive_root"] = str(legacy)
+        manifest["manifest_path"] = str(legacy_manifest)
+        archived = Path(entry["archive_path"])
+        archived.parent.mkdir(parents=True)
+        import shutil
+        shutil.move(entry["store_paths"][0]["resolved_path"], archived)
+        entry["archive_state"] = "archived"
+        manifest["status"] = "archived"
+        legacy_manifest.parent.mkdir(parents=True, exist_ok=True)
+        legacy_manifest.write_text(json.dumps(manifest), encoding="utf-8")
+        with (mock.patch.object(skill_archive, "MANIFEST", self.vault / "current.json"),
+              mock.patch.object(skill_archive, "ROOT", legacy_repo),
+              mock.patch.object(skill_archive, "USER_ROOT", self.home)):
+            skill_archive.restore_archive(manifest, manifest_path=legacy_manifest)
+        saved = json.loads(legacy_manifest.read_text(encoding="utf-8"))
+        self.assertEqual("restored", saved["status"])
+        self.assertFalse((self.vault / "current.json").exists())
+
+    def test_cli_accepts_explicit_checkout_legacy_manifest(self):
+        legacy_repo = self.base / "repo"
+        legacy = legacy_repo / "on-demand"
+        manifest_path = legacy / "pilot-manifest.json"
+        legacy.mkdir(parents=True)
+        manifest_path.write_text(json.dumps({
+            "archive_root": str(legacy), "status": "archived", "entries": [],
+        }), encoding="utf-8")
+        with (mock.patch.object(skill_archive, "ROOT", legacy_repo),
+              mock.patch.object(skill_archive, "USER_ROOT", self.home),
+              mock.patch.object(skill_archive, "DATA", self.vault),
+              mock.patch.object(skill_archive, "MANIFEST", self.vault / "current.json"),
+              mock.patch.object(skill_archive, "restore_archive") as restore,
+              mock.patch.object(sys, "argv", ["skill_archive.py", "--restore", "--manifest", str(manifest_path)])):
+            self.assertEqual(0, skill_archive.main())
+        restore.assert_called_once()
+        self.assertEqual(manifest_path, restore.call_args.kwargs["manifest_path"])
+
 
 
 class DoctorTests(unittest.TestCase):
@@ -299,6 +395,13 @@ class DoctorTests(unittest.TestCase):
 
     def test_doctor_clean_on_healthy_index(self):
         self.assertEqual([], finder.doctor(home=self.home, library=self.library))
+
+    def test_doctor_reports_non_object_trust_json_as_corrupt(self):
+        (self.library / "trust-overrides.json").write_text("[]", encoding="utf-8")
+        findings = finder.doctor(home=self.home, library=self.library)
+        self.assertIn("CORRUPT_MANIFEST", {finding["code"] for finding in findings})
+        metrics = finder.collect_metrics(home=self.home, library=self.library)
+        self.assertGreater(metrics["doctor"]["findings"], 0)
 
     def test_doctor_flags_broken_variant(self):
         (self.home / ".agents" / "skills" / "alpha-skill" / "SKILL.md").unlink()

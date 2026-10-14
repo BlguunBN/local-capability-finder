@@ -113,6 +113,23 @@ class ContractTests(unittest.TestCase):
             )
         self.assertEqual("STALE_REVISION", ctx.exception.code)
 
+    def test_load_revision_tracks_current_file_bytes(self):
+        cap_id = self.approved_id()
+        detail = self.call("get_capability", {"capability_id": cap_id})
+        path = Path(detail["source_path"])
+        original = path.read_bytes()
+        self.addCleanup(path.write_bytes, original)
+        path.write_bytes(original + b"\nupdated after indexing\n")
+        loaded = self.call("load_skill", {"capability_id": cap_id})
+        expected = "sha256:" + __import__("hashlib").sha256(path.read_bytes()).hexdigest()
+        self.assertEqual(expected, loaded["revision"])
+        self.assertIn("updated after indexing", loaded["content"])
+        plan = finder.preview_activation(cap_id, "codex", home=self.home, library=self.library)
+        self.assertEqual(expected, plan["revision"])
+        with self.assertRaises(finder.CapError) as ctx:
+            self.call("load_skill", {"capability_id": cap_id, "revision": detail["content_hash"]})
+        self.assertEqual("STALE_REVISION", ctx.exception.code)
+
     def test_structured_errors_carry_codes(self):
         with self.assertRaises(finder.CapError) as ctx:
             self.call("get_capability", {"capability_id": "skill:does-not-exist"})

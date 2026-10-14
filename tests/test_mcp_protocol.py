@@ -22,6 +22,23 @@ def request(method, params=None):
 
 
 class MCPProtocolTests(unittest.TestCase):
+    def test_audit_omits_free_text_and_swallows_audit_failures(self):
+        import tempfile
+        import capability_finder
+
+        with tempfile.TemporaryDirectory() as temp:
+            home, library = Path(temp) / "home", Path(temp) / "lib"
+            library.mkdir(parents=True)
+            with patch("capability_finder._paths", return_value=(home, library)):
+                capability_mcp._audit("search_capabilities", {
+                    "query": "private search", "project_hint": "private project",
+                    "agent": "codex", "capability_id": "skill:one", "limit": 3,
+                }, "ok")
+            entry = json.loads((library / "_audit.log").read_text(encoding="utf-8"))
+            self.assertEqual({"agent": "codex", "capability_id": "skill:one"}, entry["arguments"])
+        with patch("capability_finder._paths", side_effect=RuntimeError("audit unavailable")):
+            capability_mcp._audit("search_capabilities", {"query": "private"}, "ok")
+
     def test_discover_advertises_modern_version_and_tools(self):
         response = capability_mcp._dispatch(request("server/discover", {"_meta": MODERN_META}))
         result = response["result"]

@@ -66,11 +66,11 @@ ROOTS: list[tuple[str, str]] = [
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".curator_backups", ".archive"}
 
 FM_BLOCK = re.compile(r"^---\s*\n(.*?)\n---\s*(?:\n|$)", re.S)
-FM_NAME = re.compile(r"^name:\s*(.+?)\s*$", re.M)
-FM_VERSION = re.compile(r"^version:\s*(.+?)\s*$", re.M)
+FM_NAME = re.compile(r"^name:[ \t]*(.+?)[ \t]*$", re.M)
+FM_VERSION = re.compile(r"^version:[ \t]*(.+?)[ \t]*$", re.M)
 FM_LIST_FIELDS = ("tags", "compatible_agents", "agents", "requirements", "requires")
-FM_LIST = re.compile(r"^(tags|compatible_agents|agents|requirements|requires):\s*(.+?)\s*$", re.M)
-FM_DESC_INLINE = re.compile(r"^description:\s*(.+?)\s*$", re.M)
+FM_LIST = re.compile(r"^(tags|compatible_agents|agents|requirements|requires):[ \t]*(.+?)[ \t]*$", re.M)
+FM_DESC_INLINE = re.compile(r"^description:[ \t]*(.+?)[ \t]*$", re.M)
 FM_DESC_BLOCK = re.compile(r"^description:\s*[|>]-?\s*\n((?:[ \t]+.*\n?)+)", re.M)
 
 

@@ -86,6 +86,14 @@ class RegistryTests(unittest.TestCase):
         self.assertEqual([], detail["managed_targets"])
         self.assertEqual(1, len(detail["legacy_ids"]))
 
+    def test_blank_frontmatter_values_do_not_capture_next_line(self):
+        metadata = library_catalog.parse_metadata(
+            "---\nname: example\nversion:\ntags:\nrequirements: python 3.11\n---\n"
+        )
+        self.assertIsNone(metadata["version"])
+        self.assertEqual([], metadata["tags"])
+        self.assertEqual(["python", "3.11"], metadata["requirements"])
+
     def test_legacy_id_still_resolves(self):
         canonical = "aes:skill:systematic-debugging-suite"
         detail = finder.show(canonical, home=self.home, library=self.library)

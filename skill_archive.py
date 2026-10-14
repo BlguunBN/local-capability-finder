@@ -76,6 +76,8 @@ ALL_AGENT_ROOTS = {
     "continue": USER_ROOT / ".continue" / "skills",
     "aider_desk": USER_ROOT / ".aider-desk" / "skills",
 }
+STORE_ALIASES = {"pi": "pi_agent", "pi-legacy": "pi", "omp": "omp_agent",
+                 "omp-managed": "omp_managed", "aider-desk": "aider_desk"}
 
 
 def inside(path: Path, root: Path) -> bool:
@@ -139,7 +141,10 @@ def link_kind(path: Path) -> str:
 def safe_archive_destination(path: Path, base: Path | None = None) -> bool:
     """Reject symlink/reparse-point parents and any destination outside base."""
     base = base or DATA
-    if not inside(path, base) or not inside(base, USER_ROOT) or is_link(base):
+    legacy_vault = ROOT / "on-demand"
+    if (not inside(path, base)
+            or not (inside(base, USER_ROOT) or inside(base, legacy_vault))
+            or is_link(base)):
         return False
     current = path
     while current != base and inside(current, base):
@@ -226,14 +231,16 @@ def load_candidates(library: Path | None = None) -> dict[str, dict[str, str]]:
 def build_manifest(names: list[str] | None = None, library: Path | None = None) -> dict:
     if not safe_archive_destination(DATA):
         raise RuntimeError(f"archive destination escapes user root: {DATA}")
-    catalog_path = (Path(library).expanduser() if library else _default_library()) / "skills_index.json"
+    library_root = Path(library).expanduser() if library else _default_library()
+    catalog_path = library_root / "skills_index.json"
     candidates = load_candidates(library)
     selected = names or PILOT
     if not selected or len(set(selected)) != len(selected):
         raise RuntimeError("select at least one unique skill name")
     entries = []
     for name in selected:
-        catalogued = candidates.get(name, {})
+        catalogued = {STORE_ALIASES.get(store, store): path
+                      for store, path in candidates.get(name, {}).items()}
         unknown = [s for s in catalogued if s != "library" and s not in ALL_AGENT_ROOTS]
         if unknown:
             raise RuntimeError(f"skill {name} lists stores this archiver cannot manage: {sorted(unknown)}")
@@ -241,7 +248,7 @@ def build_manifest(names: list[str] | None = None, library: Path | None = None) 
         # Capture every existing name entry in a managed root as well.
         stores.extend(s for s, root in ALL_AGENT_ROOTS.items() if (root / name).exists() or is_link(root / name))
         if "library" in catalogued:
-            canonical = _default_library() / "skills" / name
+            canonical = library_root / "skills" / name
             if (canonical / "SKILL.md").is_file() or canonical.is_symlink():
                 stores.append("library")
         stores = list(dict.fromkeys(stores))
@@ -251,7 +258,7 @@ def build_manifest(names: list[str] | None = None, library: Path | None = None) 
         for store in stores:
             root = ALL_AGENT_ROOTS.get(store) or STORE_ROOTS.get(store)
             if store == "library":
-                root = _default_library() / "skills"
+                root = library_root / "skills"
             if root is None:
                 raise RuntimeError(f"unrecognized store {store!r} for {name}")
             candidate = root / name
@@ -312,13 +319,16 @@ def build_manifest(names: list[str] | None = None, library: Path | None = None) 
     }
 
 
-def write_manifest(manifest: dict) -> None:
-    if not inside(MANIFEST, DATA) or not safe_archive_destination(MANIFEST):
-        raise RuntimeError(f"manifest destination is unsafe: {MANIFEST}")
-    DATA.mkdir(parents=True, exist_ok=True)
-    temp = MANIFEST.with_suffix(MANIFEST.suffix + ".tmp")
+def write_manifest(manifest: dict, archive_base: Path | None = None,
+                   manifest_path: Path | None = None) -> None:
+    base = Path(archive_base or _archive_base(manifest))
+    destination = Path(manifest_path or manifest.get("manifest_path") or MANIFEST)
+    if not inside(destination, base) or not safe_archive_destination(destination, base):
+        raise RuntimeError(f"manifest destination is unsafe: {destination}")
+    base.mkdir(parents=True, exist_ok=True)
+    temp = destination.with_suffix(destination.suffix + ".tmp")
     temp.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-    os.replace(temp, MANIFEST)
+    os.replace(temp, destination)
 
 
 def refresh_catalog() -> bool:
@@ -396,10 +406,12 @@ def apply_archive(manifest: dict) -> None:
         raise
 
 
-def restore_archive(manifest: dict) -> None:
+def restore_archive(manifest: dict, manifest_path: Path | None = None) -> None:
     if manifest.get("status") not in ("archived", "partial_archive", "restoring", "partial_restore"):
         raise RuntimeError("manifest is not in archived state")
     base = _archive_base(manifest)
+    destination = Path(manifest_path or manifest.get("manifest_path") or MANIFEST)
+    manifest["manifest_path"] = str(destination)
     # Preflight every entry before changing anything.
     for entry in manifest["entries"]:
         if entry.get("archive_state") in (None, "pending"):
@@ -414,7 +426,7 @@ def restore_archive(manifest: dict) -> None:
                                 if entry.get("archive_batch") else base / "skills" / entry["name"])):
             raise RuntimeError(f"manifest contains an unsafe source or archive path for {entry.get('name')}")
         if archived.exists():
-            if not inside(archived, USER_ROOT) or not safe_archive_destination(archived, base) or not archived.is_dir() or tree_hash(archived) != entry["source_sha256"]:
+            if not safe_archive_destination(archived, base) or not archived.is_dir() or tree_hash(archived) != entry["source_sha256"]:
                 raise RuntimeError(f"archive missing, unsafe, or modified: {archived}")
         elif not source.is_dir() or tree_hash(source) != entry["source_sha256"]:
             raise RuntimeError(f"neither intact archive nor source is available: {archived}")
@@ -435,7 +447,7 @@ def restore_archive(manifest: dict) -> None:
                 if not inside(target, USER_ROOT) or not same_path(target, source):
                     raise RuntimeError(f"recorded link target is unsafe or mismatched: {target}")
     manifest["status"] = "restoring"
-    write_manifest(manifest)
+    write_manifest(manifest, archive_base=base, manifest_path=destination)
     try:
         for entry in manifest["entries"]:
             if entry.get("archive_state") in (None, "pending", "restored"):
@@ -452,14 +464,14 @@ def restore_archive(manifest: dict) -> None:
                 alias.parent.mkdir(parents=True, exist_ok=True)
                 recreate_link(alias, p["link_target"], p["link_kind"])
             entry["archive_state"] = "restored"
-            write_manifest(manifest)
+            write_manifest(manifest, archive_base=base, manifest_path=destination)
         manifest["status"] = "restored"
-        write_manifest(manifest)
+        write_manifest(manifest, archive_base=base, manifest_path=destination)
         refresh_catalog()
     except Exception as exc:
         manifest["status"] = "partial_restore"
         manifest["last_error"] = str(exc)
-        write_manifest(manifest)
+        write_manifest(manifest, archive_base=base, manifest_path=destination)
         raise
 
 
@@ -477,12 +489,21 @@ def main() -> int:
         if args.manifest:
             manifest_arg = Path(args.manifest)
             MANIFEST = manifest_arg if manifest_arg.is_absolute() else DATA / manifest_arg
-            if not inside(MANIFEST, DATA) or MANIFEST.suffix.lower() != ".json":
-                raise RuntimeError("--manifest must be a .json path inside on-demand")
+            allowed = inside(MANIFEST, USER_ROOT) or (
+                args.restore and inside(MANIFEST, ROOT / "on-demand"))
+            if MANIFEST.suffix.lower() != ".json" or not allowed:
+                raise RuntimeError("--manifest must be a .json path in the user archive or legacy checkout vault")
+            if not args.restore and not inside(MANIFEST, DATA):
+                raise RuntimeError("new manifests must be inside the configured archive root")
         names = [part.strip() for part in args.names.split(",") if part.strip()] if args.names else None
         if args.restore:
             manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
-            restore_archive(manifest)
+            if not isinstance(manifest, dict):
+                raise RuntimeError("manifest must contain a JSON object")
+            archive_base = _archive_base(manifest)
+            if not inside(MANIFEST, archive_base):
+                raise RuntimeError("manifest path is outside its recorded archive root")
+            restore_archive(manifest, manifest_path=MANIFEST)
             print(f"restored {len(manifest['entries'])} skills from {MANIFEST}")
         else:
             if MANIFEST.exists():
